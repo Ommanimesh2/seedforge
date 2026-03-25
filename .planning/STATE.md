@@ -6,7 +6,7 @@ Phase 1: Project Scaffolding & Core Types (NOT STARTED)
 ## Phase Status
 | Phase | Status | Notes |
 |-------|--------|-------|
-| 1. Scaffolding & Core Types | NOT STARTED | Next up |
+| 1. Scaffolding & Core Types | PLANNED | Phase plan created |
 | 2. PG Schema Introspection | NOT STARTED | |
 | 3. Dependency Resolution | NOT STARTED | |
 | 4. Column-to-Faker Mapping | NOT STARTED | |
@@ -27,4 +27,4 @@ Phase 1: Project Scaffolding & Core Types (NOT STARTED)
 - **Goal:** GitHub stars and developer reputation
 
 ## Next Action
-Run `/gsd:plan-phase 1` to create detailed execution plan for Phase 1.
+Run `/gsd:execute-phase 1` to start building Phase 1.
