@@ -2,7 +2,8 @@
 
 import { createRequire } from 'node:module'
 import { Command } from 'commander'
-import { SeedForgeError } from './errors/index.js'
+import { SeedForgeError, redactConnectionString } from './errors/index.js'
+import { connect, disconnect, introspect } from './introspect/index.js'
 
 const require = createRequire(import.meta.url)
 const pkg = require('../package.json') as { version: string }
@@ -42,20 +43,67 @@ export function createProgram(): Command {
     .option('--json', 'machine-readable JSON output', false)
     .option('--yes', 'skip confirmation prompts', false)
     .action(async (options: CliOptions) => {
-      // Stub: will be filled in Phase 2+
-      if (options.verbose || options.debug) {
-        console.log('Parsed options:', {
+      if (!options.quiet) {
+        console.log(`seedforge v${pkg.version}`)
+      }
+
+      if (options.debug) {
+        console.log('Options:', {
           ...options,
-          db: options.db.replace(/:[^@]+@/, ':***@'),
+          db: redactConnectionString(options.db),
         })
       }
-      console.log(`seedforge v${pkg.version}`)
-      console.log(`Target: ${options.schema} schema, ${options.count} rows/table`)
-      if (options.dryRun) {
-        console.log('Mode: dry-run (no changes will be made)')
-      }
-      if (options.output) {
-        console.log(`Output: ${options.output}`)
+
+      // Connect and introspect
+      const client = await connect({
+        connectionString: options.db,
+        schema: options.schema,
+        skipProductionCheck: options.yes,
+      })
+
+      try {
+        const schema = await introspect(client, options.schema)
+
+        if (!options.quiet) {
+          const tableCount = schema.tables.size
+          const enumCount = schema.enums.size
+          const fkCount = Array.from(schema.tables.values())
+            .reduce((sum, t) => sum + t.foreignKeys.length, 0)
+          console.log(
+            `Introspected ${tableCount} tables, ${enumCount} enums, ${fkCount} foreign keys`,
+          )
+        }
+
+        if (options.verbose) {
+          for (const [name, table] of schema.tables) {
+            console.log(
+              `  ${name}: ${table.columns.size} columns, ${table.foreignKeys.length} FKs`,
+            )
+          }
+        }
+
+        if (options.debug) {
+          // Serialize Maps for JSON output
+          const serializable = {
+            ...schema,
+            tables: Object.fromEntries(
+              Array.from(schema.tables.entries()).map(([k, v]) => [
+                k,
+                { ...v, columns: Object.fromEntries(v.columns) },
+              ]),
+            ),
+            enums: Object.fromEntries(schema.enums),
+          }
+          console.log(JSON.stringify(serializable, null, 2))
+        }
+
+        if (options.dryRun) {
+          console.log('Dry-run mode: no data generated')
+        }
+
+        // TODO: Phases 3-6 will add generation and insertion here
+      } finally {
+        await disconnect(client)
       }
     })
 
