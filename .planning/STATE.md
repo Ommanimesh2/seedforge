@@ -1,18 +1,18 @@
 # seedforge — Project State
 
 ## Current Phase
-Phase 1: Project Scaffolding & Core Types (NOT STARTED)
+Phase 2: PG Schema Introspection (NEXT)
 
 ## Phase Status
 | Phase | Status | Notes |
 |-------|--------|-------|
-| 1. Scaffolding & Core Types | PLANNED | Phase plan created |
-| 2. PG Schema Introspection | NOT STARTED | |
-| 3. Dependency Resolution | NOT STARTED | |
-| 4. Column-to-Faker Mapping | NOT STARTED | |
+| 1. Scaffolding & Core Types | DONE | 32 tests, lint clean, build verified |
+| 2. PG Schema Introspection | NEXT | |
+| 3. Dependency Resolution | NOT STARTED | Can run parallel with Phase 4 |
+| 4. Column-to-Faker Mapping | NOT STARTED | Can run parallel with Phase 3 |
 | 5. Data Generation Engine | NOT STARTED | |
 | 6. Output & Insertion | NOT STARTED | |
-| 7. Configuration System | NOT STARTED | |
+| 7. Configuration System | NOT STARTED | Can start after Phase 1 |
 | 8. CLI Polish & Release | NOT STARTED | |
 
 ## Key Decisions
@@ -27,4 +27,4 @@ Phase 1: Project Scaffolding & Core Types (NOT STARTED)
 - **Goal:** GitHub stars and developer reputation
 
 ## Next Action
-Run `/gsd:execute-phase 1` to start building Phase 1.
+Run `/gsd:plan-phase 2` to plan PG Schema Introspection, or execute phases 2-4 in parallel.
