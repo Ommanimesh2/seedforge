@@ -1,0 +1,17 @@
+src/
+.planning/
+tests/
+*.test.ts
+*.test.js
+*.spec.ts
+*.spec.js
+__tests__/
+vitest.config.ts
+tsconfig.json
+eslint.config.js
+.eslintrc*
+.github/
+DEEP-RESEARCH.md
+CONTRIBUTING.md
+.seedforge.yml
+.seedforge.yaml

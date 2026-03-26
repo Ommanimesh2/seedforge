@@ -2,13 +2,29 @@ import type { InsertionSummary } from './types.js'
 import { OutputMode } from './types.js'
 
 /**
+ * Determine whether color output is enabled.
+ * Respects NO_COLOR (https://no-color.org/) and FORCE_COLOR conventions.
+ */
+export function isColorEnabled(): boolean {
+  if (process.env.FORCE_COLOR !== undefined && process.env.FORCE_COLOR !== '0') {
+    return true
+  }
+  if (process.env.NO_COLOR !== undefined && process.env.NO_COLOR !== '') {
+    return false
+  }
+  return Boolean(process.stderr.isTTY)
+}
+
+/**
  * Simple progress reporter that writes to stderr.
  * TTY-aware: uses \\r overwrite when interactive, newlines when piped.
+ * Respects NO_COLOR and FORCE_COLOR environment variables.
  */
 export class ProgressReporter {
   private readonly quiet: boolean
   private readonly showProgress: boolean
   private readonly isTTY: boolean
+  private readonly colorEnabled: boolean
   private lastUpdateTime: Map<string, number> = new Map()
   private static readonly THROTTLE_MS = 100
 
@@ -16,6 +32,7 @@ export class ProgressReporter {
     this.quiet = options.quiet
     this.showProgress = options.showProgress
     this.isTTY = Boolean(process.stderr.isTTY)
+    this.colorEnabled = isColorEnabled()
   }
 
   /**

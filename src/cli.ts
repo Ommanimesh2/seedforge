@@ -49,6 +49,13 @@ export function createProgram(): Command {
     .option('--debug', 'debug logging', false)
     .option('--json', 'machine-readable JSON output', false)
     .option('--yes', 'skip confirmation prompts', false)
+    .addHelpText('after', `
+Examples:
+  $ seedforge --db postgres://localhost/mydb
+  $ seedforge --db postgres://localhost/mydb --count 100 --seed 42
+  $ seedforge --db postgres://localhost/mydb --output seed.sql --dry-run
+  $ seedforge --config .seedforge.yml
+`)
     .action(async (options: CliOptions) => {
       // Build CLI overrides: only include values explicitly passed by the user
       const cliOverrides: CliOverrides = {}
