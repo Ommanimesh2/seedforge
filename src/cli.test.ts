@@ -93,12 +93,24 @@ describe('CLI', () => {
     expect(opts.yes).toBe(true)
   })
 
-  it('errors when --db is missing', () => {
+  it('--db is optional (can come from config file)', () => {
+    // Verify that --db is registered as a non-mandatory option
     const program = createProgram()
-    program.exitOverride()
-    expect(() => {
-      program.parse(['node', 'seedforge'])
-    }).toThrow()
+    const dbOption = program.options.find(
+      (opt) => opt.long === '--db',
+    )
+    expect(dbOption).toBeDefined()
+    // mandatory=false means it was registered with .option() not .requiredOption()
+    expect(dbOption!.mandatory).toBe(false)
+  })
+
+  it('has --config flag registered', () => {
+    // Verify that --config is registered as an option
+    const program = createProgram()
+    const configOption = program.options.find(
+      (opt) => opt.long === '--config',
+    )
+    expect(configOption).toBeDefined()
   })
 
   it('shows version', () => {

@@ -2,14 +2,20 @@
 
 import { createRequire } from 'node:module'
 import { Command } from 'commander'
-import { SeedForgeError, redactConnectionString } from './errors/index.js'
+import { SeedForgeError, ConfigError, redactConnectionString } from './errors/index.js'
 import { connect, disconnect, introspect } from './introspect/index.js'
+import { loadAndMergeConfig } from './config/loader.js'
+import type { CliOverrides } from './config/types.js'
+import { buildInsertPlan } from './graph/index.js'
+import { generate } from './generate/index.js'
+import { executeOutput, resolveOutputMode, OutputMode } from './output/index.js'
 
 const require = createRequire(import.meta.url)
 const pkg = require('../package.json') as { version: string }
 
 export interface CliOptions {
-  db: string
+  db?: string
+  config?: string
   count: number
   seed?: number
   dryRun: boolean
@@ -30,7 +36,8 @@ export function createProgram(): Command {
     .name('seedforge')
     .description('Generate realistic seed data from your database schema')
     .version(pkg.version)
-    .requiredOption('--db <url>', 'PostgreSQL connection string')
+    .option('--db <url>', 'PostgreSQL connection string')
+    .option('--config <path>', 'path to .seedforge.yml config file')
     .option('--count <number>', 'rows per table', (v) => parseInt(v, 10), 50)
     .option('--seed <number>', 'PRNG seed for deterministic output', (v) => parseInt(v, 10))
     .option('--dry-run', 'preview without executing', false)
@@ -43,6 +50,63 @@ export function createProgram(): Command {
     .option('--json', 'machine-readable JSON output', false)
     .option('--yes', 'skip confirmation prompts', false)
     .action(async (options: CliOptions) => {
+      // Build CLI overrides: only include values explicitly passed by the user
+      const cliOverrides: CliOverrides = {}
+      const optionSources = program as unknown as { getOptionValueSource(name: string): string | undefined }
+      if (typeof optionSources.getOptionValueSource === 'function') {
+        if (optionSources.getOptionValueSource('db') === 'cli') {
+          cliOverrides.db = options.db
+        }
+        if (optionSources.getOptionValueSource('count') === 'cli') {
+          cliOverrides.count = options.count
+        }
+        if (optionSources.getOptionValueSource('seed') === 'cli') {
+          cliOverrides.seed = options.seed
+        }
+        if (optionSources.getOptionValueSource('schema') === 'cli') {
+          cliOverrides.schema = options.schema
+        }
+        if (optionSources.getOptionValueSource('exclude') === 'cli') {
+          cliOverrides.exclude = options.exclude
+        }
+        if (optionSources.getOptionValueSource('output') === 'cli') {
+          cliOverrides.output = options.output
+        }
+        if (optionSources.getOptionValueSource('dryRun') === 'cli') {
+          cliOverrides.dryRun = options.dryRun
+        }
+      } else {
+        // Fallback: treat all options as CLI-provided
+        if (options.db) cliOverrides.db = options.db
+        if (options.seed !== undefined) cliOverrides.seed = options.seed
+        if (options.exclude) cliOverrides.exclude = options.exclude
+        cliOverrides.count = options.count
+        cliOverrides.schema = options.schema
+      }
+
+      // Load and merge config
+      const mergedConfig = loadAndMergeConfig(cliOverrides, {
+        configPath: options.config,
+      })
+
+      // Determine connection URL
+      const connectionUrl = mergedConfig.connection.url ?? options.db
+      if (!connectionUrl) {
+        throw new ConfigError(
+          'SF5017',
+          'No database connection URL provided',
+          [
+            'Pass --db <url> on the command line',
+            'Or set connection.url in .seedforge.yml',
+            'Or set DATABASE_URL environment variable and use ${DATABASE_URL} in config',
+          ],
+        )
+      }
+
+      const effectiveSchema = mergedConfig.connection.schema ?? options.schema ?? 'public'
+      const effectiveCount = mergedConfig.count
+      const effectiveSeed = mergedConfig.seed
+
       if (!options.quiet) {
         console.log(`seedforge v${pkg.version}`)
       }
@@ -50,19 +114,19 @@ export function createProgram(): Command {
       if (options.debug) {
         console.log('Options:', {
           ...options,
-          db: redactConnectionString(options.db),
+          db: redactConnectionString(connectionUrl),
         })
       }
 
       // Connect and introspect
       const client = await connect({
-        connectionString: options.db,
-        schema: options.schema,
+        connectionString: connectionUrl,
+        schema: effectiveSchema,
         skipProductionCheck: options.yes,
       })
 
       try {
-        const schema = await introspect(client, options.schema)
+        const schema = await introspect(client, effectiveSchema)
 
         if (!options.quiet) {
           const tableCount = schema.tables.size
@@ -97,11 +161,59 @@ export function createProgram(): Command {
           console.log(JSON.stringify(serializable, null, 2))
         }
 
-        if (options.dryRun) {
-          console.log('Dry-run mode: no data generated')
+        // Phase 3: Build insert plan (dependency graph + topological order)
+        const plan = buildInsertPlan(schema)
+
+        if (options.verbose && !options.quiet) {
+          console.log(`Insert order: ${plan.ordered.join(' -> ')}`)
+          if (plan.deferredEdges.length > 0) {
+            console.log(`Deferred edges: ${plan.deferredEdges.length}`)
+          }
+          if (plan.selfRefTables.length > 0) {
+            console.log(`Self-referencing tables: ${plan.selfRefTables.join(', ')}`)
+          }
         }
 
-        // TODO: Phases 3-6 will add generation and insertion here
+        // Phase 5: Generate data
+        const mode = resolveOutputMode(options)
+        const generationClient = mode === OutputMode.DRY_RUN ? null : client
+        const generationResult = await generate(schema, plan, generationClient, {
+          globalRowCount: effectiveCount,
+          seed: effectiveSeed,
+        })
+
+        if (!options.quiet) {
+          const totalRows = Array.from(generationResult.tables.values())
+            .reduce((sum, t) => sum + t.rows.length, 0)
+          console.log(`Generated ${totalRows} rows across ${generationResult.tables.size} tables`)
+        }
+
+        // Phase 6: Output
+        const outputOptions = {
+          mode,
+          client: mode === OutputMode.DIRECT ? client : undefined,
+          filePath: options.output,
+          batchSize: 500,
+          showProgress: !options.quiet,
+          quiet: options.quiet,
+        }
+
+        const summary = await executeOutput(
+          generationResult,
+          schema,
+          plan,
+          outputOptions,
+          pkg.version,
+        )
+
+        // JSON output mode
+        if (options.json) {
+          const jsonSummary = {
+            ...summary,
+            rowsPerTable: Object.fromEntries(summary.rowsPerTable),
+          }
+          console.log(JSON.stringify(jsonSummary, null, 2))
+        }
       } finally {
         await disconnect(client)
       }

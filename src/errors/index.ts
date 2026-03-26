@@ -255,3 +255,102 @@ export function generationFailure(
     { table, detail },
   )
 }
+
+// Insertion error factories (SF4xxx)
+
+export function insertFailed(
+  tableName: string,
+  message: string,
+  sql?: string,
+): InsertionError {
+  return new InsertionError(
+    'SF4001',
+    `INSERT failed for table ${tableName}: ${message}`,
+    [
+      'Check for unique constraint violations (try reducing row count)',
+      'Check for NOT NULL constraint violations',
+      'Run with --dry-run to preview generated SQL',
+    ],
+    { tableName, sql: sql?.slice(0, 500) },
+  )
+}
+
+export function updateFailed(
+  tableName: string,
+  column: string,
+  message: string,
+): InsertionError {
+  return new InsertionError(
+    'SF4002',
+    `Deferred UPDATE failed for ${tableName}.${column}: ${message}`,
+    [
+      'This may indicate an issue with circular FK resolution',
+      'Check that the referenced row exists',
+    ],
+    { tableName, column },
+  )
+}
+
+export function fileWriteFailed(
+  filePath: string,
+  message: string,
+): InsertionError {
+  return new InsertionError(
+    'SF4003',
+    `Failed to write SQL file: ${filePath}: ${message}`,
+    [
+      'Check that the directory exists and is writable',
+      'Check available disk space',
+    ],
+    { filePath },
+  )
+}
+
+export function transactionFailed(
+  tableName: string,
+  message: string,
+): InsertionError {
+  return new InsertionError(
+    'SF4004',
+    `Transaction failed for table ${tableName}: ${message}`,
+    [
+      "The table's data was rolled back",
+      'Other tables that completed successfully are still committed',
+    ],
+    { tableName },
+  )
+}
+
+export function sequenceResetFailed(
+  sequenceName: string,
+  message: string,
+): InsertionError {
+  return new InsertionError(
+    'SF4005',
+    `Failed to reset sequence ${sequenceName}: ${message}`,
+    [
+      'The sequence may need manual reset',
+      `Run: SELECT setval('${sequenceName}', (SELECT MAX(id) FROM table))`,
+    ],
+    { sequenceName },
+  )
+}
+
+export function missingConnection(): InsertionError {
+  return new InsertionError(
+    'SF4006',
+    'Direct insertion mode requires a database connection',
+    [
+      'Provide a connection string with --db <url>',
+      'Or use --output <file> to write SQL to a file instead',
+    ],
+  )
+}
+
+export function missingOutputPath(): InsertionError {
+  return new InsertionError(
+    'SF4007',
+    'File output mode requires an output path',
+    ['Specify output path with --output <file.sql>'],
+  )
+}
