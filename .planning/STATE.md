@@ -1,7 +1,6 @@
 # seedforge — Project State
 
-## Current Phase
-Phase 8: CLI Polish & Release (FINAL)
+## Status: v0.1.0 COMPLETE
 
 ## Phase Status
 | Phase | Status | Tests |
@@ -13,14 +12,20 @@ Phase 8: CLI Polish & Release (FINAL)
 | 5. Data Generation Engine | DONE | 102 |
 | 6. Output & Insertion | DONE | 79 |
 | 7. Configuration System | DONE | 103 |
-| 8. CLI Polish & Release | NEXT | — |
+| 8. CLI Polish & Release | DONE | — |
 
-## Stats
+## Final Stats
 - **Total tests:** 577
+- **Test files:** 51
 - **Build:** clean
 - **Lint:** clean
-- **Source files:** ~80
-- **Test files:** 51
 
-## Next Action
-Phase 8: CLI polish, README, license, and npm publish preparation.
+## Next Steps (v2)
+- MySQL + SQLite support
+- Prisma/Drizzle/TypeORM schema parsing
+- JPA/Hibernate entity parsing
+- Community parser plugin system
+- COPY-based bulk insertion
+- Load testing scale (100K+ rows)
+- Cross-column semantic coherence
+- Schema-diff-aware regeneration
