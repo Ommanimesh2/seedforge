@@ -1,19 +1,25 @@
 # seedforge — Project State
 
 ## Current Phase
-Phase 2: PG Schema Introspection (NEXT)
+Phase 5: Data Generation Engine (NEXT)
 
 ## Phase Status
 | Phase | Status | Notes |
 |-------|--------|-------|
-| 1. Scaffolding & Core Types | DONE | 32 tests, lint clean, build verified |
-| 2. PG Schema Introspection | NEXT | |
-| 3. Dependency Resolution | NOT STARTED | Can run parallel with Phase 4 |
-| 4. Column-to-Faker Mapping | NOT STARTED | Can run parallel with Phase 3 |
-| 5. Data Generation Engine | NOT STARTED | |
+| 1. Scaffolding & Core Types | DONE | 32 tests |
+| 2. PG Schema Introspection | DONE | 69 tests, 16 source files |
+| 3. Dependency Resolution | DONE | 56 tests, 8 source files |
+| 4. Column-to-Faker Mapping | DONE | 136 tests, 190 column patterns |
+| 5. Data Generation Engine | NEXT | |
 | 6. Output & Insertion | NOT STARTED | |
-| 7. Configuration System | NOT STARTED | Can start after Phase 1 |
+| 7. Configuration System | NOT STARTED | |
 | 8. CLI Polish & Release | NOT STARTED | |
+
+## Stats
+- **Total tests:** 293
+- **Total source files:** ~60
+- **Build:** clean
+- **Lint:** clean
 
 ## Key Decisions
 - **Name:** seedforge
@@ -27,4 +33,6 @@ Phase 2: PG Schema Introspection (NEXT)
 - **Goal:** GitHub stars and developer reputation
 
 ## Next Action
-Run `/gsd:plan-phase 2` to plan PG Schema Introspection, or execute phases 2-4 in parallel.
+Plan and execute Phase 5 (Data Generation Engine).
+Phases 5+6 are sequential (generation before output).
+Phase 7 (Config) can run in parallel with 5/6.
