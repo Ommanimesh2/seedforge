@@ -209,3 +209,49 @@ export function uniqueValueExhaustion(
     { table, column, requested },
   )
 }
+
+export function existingDataQueryFailure(
+  table: string,
+  detail: string,
+): GenerationError {
+  return new GenerationError(
+    'SF3003',
+    `Failed to query existing data for table "${table}": ${detail}`,
+    [
+      'Check that the database connection is valid',
+      'Ensure the table exists and is accessible',
+    ],
+    { table, detail },
+  )
+}
+
+export function fkReferencePoolEmpty(
+  table: string,
+  column: string,
+  referencedTable: string,
+): GenerationError {
+  return new GenerationError(
+    'SF3004',
+    `No reference values available for FK ${table}.${column} -> ${referencedTable}`,
+    [
+      `Ensure ${referencedTable} is generated before ${table}`,
+      'Or make the FK column nullable',
+    ],
+    { table, column, referencedTable },
+  )
+}
+
+export function generationFailure(
+  table: string,
+  detail: string,
+): GenerationError {
+  return new GenerationError(
+    'SF3005',
+    `Generation failed for table "${table}": ${detail}`,
+    [
+      'Check the schema definition for correctness',
+      'Ensure all referenced tables exist',
+    ],
+    { table, detail },
+  )
+}
