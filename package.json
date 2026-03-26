@@ -1,0 +1,59 @@
+{
+  "name": "seedforge",
+  "version": "0.1.0",
+  "description": "Generate realistic seed data from your database schema",
+  "type": "module",
+  "bin": {
+    "seedforge": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src/",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "seed",
+    "database",
+    "postgresql",
+    "faker",
+    "test-data",
+    "schema",
+    "cli",
+    "data-generation"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@faker-js/faker": "^10.4.0",
+    "commander": "^14.0.3",
+    "pg": "^8.20.0",
+    "pg-format": "^1.0.4",
+    "yaml": "^2.8.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/pg": "^8.20.0",
+    "@types/pg-format": "^1.0.5",
+    "eslint": "^10.1.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.57.2",
+    "vitest": "^4.1.1"
+  }
+}
