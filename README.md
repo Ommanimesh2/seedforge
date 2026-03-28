@@ -9,7 +9,7 @@ Point seedforge at your database and it produces INSERT statements with data tha
 ```
 $ seedforge --db postgres://localhost/myapp --count 10
 
-seedforge v0.1.1
+seedforge v1.0.0
 Introspected 8 tables, 2 enums, 12 foreign keys
 Insert order: countries -> users -> categories -> products -> orders -> order_items -> reviews -> audit_log
 Generated 80 rows across 8 tables
