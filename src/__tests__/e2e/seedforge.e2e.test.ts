@@ -513,4 +513,212 @@ describe('seedforge e2e', () => {
       }
     }, 60_000)
   })
+
+  // ── Test: Nullable columns ──────────────────────────────────
+
+  describe('Nullable columns', () => {
+    let client: pg.Client
+
+    afterAll(async () => { await client?.end() })
+
+    it('generates some NULLs for nullable columns', async () => {
+      const ctx = await runSeedforge(container, BASIC_TYPES, 100)
+      client = ctx.client
+
+      // bio is nullable TEXT — should have some NULLs and some values
+      const { rows: nullCount } = await client.query(
+        'SELECT COUNT(*)::int AS cnt FROM basic_types WHERE bio IS NULL',
+      )
+      const { rows: nonNullCount } = await client.query(
+        'SELECT COUNT(*)::int AS cnt FROM basic_types WHERE bio IS NOT NULL',
+      )
+      // With 10% nullable rate and 100 rows, expect roughly 5-20 NULLs
+      expect(nullCount[0].cnt).toBeGreaterThan(0)
+      expect(nonNullCount[0].cnt).toBeGreaterThan(0)
+    }, 60_000)
+  })
+
+  // ── Test: Existing data augmentation ────────────────────────
+
+  describe('Existing data augmentation', () => {
+    let client: pg.Client
+
+    afterAll(async () => { await client?.end() })
+
+    it('adds rows on top of existing data without conflicts', async () => {
+      // First run: seed 10 rows
+      const ctx = await runSeedforge(container, BASIC_TYPES, 10)
+      client = ctx.client
+
+      const { rows: before } = await client.query('SELECT COUNT(*)::int AS cnt FROM basic_types')
+      expect(before[0].cnt).toBe(10)
+
+      // Second run: seed 10 more rows into the same database
+      const schema = await introspect(client, 'public')
+      const plan = buildInsertPlan(schema)
+      const result = await generate(schema, plan, client, {
+        globalRowCount: 10,
+        seed: 99, // different seed
+      })
+      await executeOutput(result, schema, plan, {
+        mode: OutputMode.DIRECT,
+        client,
+        batchSize: 500,
+        showProgress: false,
+        quiet: true,
+      })
+
+      const { rows: after } = await client.query('SELECT COUNT(*)::int AS cnt FROM basic_types')
+      expect(after[0].cnt).toBe(20)
+
+      // All emails still unique (no collisions)
+      const { rows: uniqueEmails } = await client.query(
+        'SELECT COUNT(DISTINCT email)::int AS cnt FROM basic_types',
+      )
+      expect(uniqueEmails[0].cnt).toBe(20)
+    }, 60_000)
+  })
+
+  // ── Test: Sequence reset ────────────────────────────────────
+
+  describe('Sequence reset after seeding', () => {
+    let client: pg.Client
+
+    afterAll(async () => { await client?.end() })
+
+    it('allows normal INSERT after seedforge runs', async () => {
+      const ctx = await runSeedforge(container, SIMPLE_FK, 10)
+      client = ctx.client
+
+      // After seedforge seeds with explicit IDs, app should still be able
+      // to INSERT without specifying IDs (sequences should be reset)
+      await client.query(
+        "INSERT INTO departments (name) VALUES ('New Department')",
+      )
+      await client.query(
+        "INSERT INTO employees (first_name, last_name, email, department_id) VALUES ('Test', 'User', 'test.new@example.com', 1)",
+      )
+
+      const { rows } = await client.query('SELECT COUNT(*)::int AS cnt FROM departments')
+      expect(rows[0].cnt).toBe(11)
+
+      const { rows: emps } = await client.query('SELECT COUNT(*)::int AS cnt FROM employees')
+      expect(emps[0].cnt).toBe(11)
+    }, 60_000)
+  })
+
+  // ── Test: Dry-run mode ──────────────────────────────────────
+
+  describe('Dry-run mode', () => {
+    let client: pg.Client
+
+    afterAll(async () => { await client?.end() })
+
+    it('generates data without inserting', async () => {
+      const adminClient = new pg.Client({ connectionString: container.getConnectionUri() })
+      await adminClient.connect()
+      const dbName = `test_dryrun_${Date.now()}`
+      await adminClient.query(`CREATE DATABASE ${dbName}`)
+      await adminClient.end()
+
+      const connUri = container.getConnectionUri().replace(/\/[^/]+$/, `/${dbName}`)
+      client = new pg.Client({ connectionString: connUri })
+      await client.connect()
+      await client.query(BASIC_TYPES)
+
+      const schema = await introspect(client, 'public')
+      const plan = buildInsertPlan(schema)
+      const result = await generate(schema, plan, client, {
+        globalRowCount: 10,
+        seed: SEED,
+      })
+
+      const summary = await executeOutput(result, schema, plan, {
+        mode: OutputMode.DRY_RUN,
+        batchSize: 500,
+        showProgress: false,
+        quiet: true,
+      })
+
+      expect(summary.mode).toBe(OutputMode.DRY_RUN)
+
+      // Database should still be empty
+      const { rows } = await client.query('SELECT COUNT(*)::int AS cnt FROM basic_types')
+      expect(rows[0].cnt).toBe(0)
+    }, 60_000)
+  })
+
+  // ── Test: RFC 2606 safe emails ──────────────────────────────
+
+  describe('RFC 2606 safe emails', () => {
+    let client: pg.Client
+
+    afterAll(async () => { await client?.end() })
+
+    it('generates emails with @example.com/net/org domains only', async () => {
+      const ctx = await runSeedforge(container, BASIC_TYPES, 50)
+      client = ctx.client
+
+      const { rows } = await client.query('SELECT email FROM basic_types')
+      const safeDomains = ['example.com', 'example.net', 'example.org']
+      for (const row of rows) {
+        const domain = row.email.split('@')[1]
+        expect(safeDomains).toContain(domain)
+      }
+    }, 60_000)
+  })
+
+  // ── Test: INET and network types ────────────────────────────
+
+  describe('Network types', () => {
+    let client: pg.Client
+
+    afterAll(async () => { await client?.end() })
+
+    it('generates valid INET values', async () => {
+      const adminClient = new pg.Client({ connectionString: container.getConnectionUri() })
+      await adminClient.connect()
+      const dbName = `test_inet_${Date.now()}`
+      await adminClient.query(`CREATE DATABASE ${dbName}`)
+      await adminClient.end()
+
+      const connUri = container.getConnectionUri().replace(/\/[^/]+$/, `/${dbName}`)
+      client = new pg.Client({ connectionString: connUri })
+      await client.connect()
+
+      await client.query(`
+        CREATE TABLE servers (
+          id SERIAL PRIMARY KEY,
+          hostname VARCHAR(200) NOT NULL,
+          ip_address INET NOT NULL,
+          mac_address MACADDR,
+          is_active BOOLEAN NOT NULL DEFAULT true
+        );
+      `)
+
+      const schema = await introspect(client, 'public')
+      const plan = buildInsertPlan(schema)
+      const result = await generate(schema, plan, client, {
+        globalRowCount: 10,
+        seed: SEED,
+      })
+      await executeOutput(result, schema, plan, {
+        mode: OutputMode.DIRECT,
+        client,
+        batchSize: 500,
+        showProgress: false,
+        quiet: true,
+      })
+
+      const { rows } = await client.query('SELECT COUNT(*)::int AS cnt FROM servers')
+      expect(rows[0].cnt).toBe(10)
+
+      // INET values are valid (PG would reject invalid ones on INSERT)
+      const { rows: ips } = await client.query('SELECT ip_address FROM servers')
+      expect(ips.length).toBe(10)
+      for (const row of ips) {
+        expect(row.ip_address).toBeTruthy()
+      }
+    }, 60_000)
+  })
 })
