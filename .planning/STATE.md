@@ -20,12 +20,16 @@
 - **Build:** clean
 - **Lint:** clean
 
-## Next Steps (v2)
-- MySQL + SQLite support
-- Prisma/Drizzle/TypeORM schema parsing
-- JPA/Hibernate entity parsing
-- Community parser plugin system
-- COPY-based bulk insertion
-- Load testing scale (100K+ rows)
-- Cross-column semantic coherence
-- Schema-diff-aware regeneration
+## Next: v2 Roadmap (10 phases)
+1. Semantic column matching (stem scorer, zero deps)
+2. MySQL support
+3. SQLite support
+4. Prisma schema parsing
+5. Drizzle schema parsing
+6. TypeORM entity parsing
+7. JPA/Hibernate entity parsing
+8. Plugin system (community parsers)
+9. Scale & performance (COPY, 100K+ rows)
+10. Advanced generation (distributions, scenarios, cross-column coherence)
+
+See `.planning/v2/ROADMAP.md` for details.
