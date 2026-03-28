@@ -103,8 +103,22 @@ export function generateTableRows(
     const timestampValues = new Map<string, Date>() // Store generated timestamp pair values
 
     for (const [columnName, column] of table.columns) {
-      // a. Skip auto-increment / generated columns
-      if (column.isAutoIncrement || column.isGenerated) {
+      // a. Skip generated columns (GENERATED ALWAYS AS)
+      if (column.isGenerated) {
+        continue
+      }
+
+      // a2. Handle auto-increment PK columns: generate explicit sequential IDs
+      //     so they're available for FK reference pools
+      if (column.isAutoIncrement) {
+        const isPK = table.primaryKey?.columns.includes(columnName) ?? false
+        if (isPK) {
+          // Start from existing max + 1, or 1 if no existing data
+          const existingMax = existingData.existingPKs.length > 0
+            ? Math.max(...existingData.existingPKs.map(pk => Number(pk[0]) || 0))
+            : 0
+          row[columnName] = existingMax + i + 1
+        }
         continue
       }
 

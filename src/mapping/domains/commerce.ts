@@ -65,8 +65,8 @@ export const commercePatterns: PatternEntry[] = [
   },
   {
     names: ['rating'],
-    generator: (faker) => faker.number.float({ min: 1, max: 5, fractionDigits: 1 }),
-    fakerMethod: 'faker.number.float({ min: 1, max: 5, fractionDigits: 1 })',
+    generator: (faker) => faker.number.int({ min: 1, max: 5 }),
+    fakerMethod: 'faker.number.int({ min: 1, max: 5 })',
     domain: DOMAIN,
   },
   {

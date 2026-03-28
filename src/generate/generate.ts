@@ -1,5 +1,6 @@
 import type { Client } from 'pg'
 import type { DatabaseSchema } from '../types/schema.js'
+import { resolveTable } from '../types/resolve.js'
 import type { InsertPlan } from '../graph/types.js'
 import type {
   GenerationConfig,
@@ -77,7 +78,7 @@ export async function generate(
   // and add their FK columns to the deferred map
   const selfRefEdges = new Map<string, DependencyEdge[]>()
   for (const tableName of plan.selfRefTables) {
-    const table = schema.tables.get(tableName)
+    const table = resolveTable(schema, tableName)
     if (!table) continue
 
     const edges: DependencyEdge[] = []
@@ -110,7 +111,7 @@ export async function generate(
 
   // 3. Walk tables in topological order
   for (const tableName of plan.ordered) {
-    const table = schema.tables.get(tableName)
+    const table = resolveTable(schema, tableName)
     if (!table) {
       warnings.push(`Table ${tableName} not found in schema, skipping`)
       continue
@@ -185,7 +186,7 @@ export async function generate(
   //    may have been generated after the table with the deferred FK column.
   for (const edge of plan.deferredEdges) {
     const tableName = edge.from
-    const table = schema.tables.get(tableName)
+    const table = resolveTable(schema, tableName)
     if (!table) continue
 
     const tableResult = result.tables.get(tableName)

@@ -1,5 +1,6 @@
 import type { GenerationResult } from '../../generate/types.js'
 import type { DatabaseSchema } from '../../types/schema.js'
+import { resolveTable } from '../../types/resolve.js'
 import type { OutputOptions, InsertionSummary } from '../types.js'
 import { OutputMode } from '../types.js'
 import type { ProgressReporter } from '../progress.js'
@@ -38,7 +39,7 @@ export async function executeDirect(
       continue
     }
 
-    const tableDef = schema.tables.get(tableName)
+    const tableDef = resolveTable(schema, tableName)
     if (!tableDef) continue
 
     const rows = tableResult.rows
@@ -102,7 +103,7 @@ export async function executeDirect(
     }
 
     for (const [tableName, updates] of updatesByTable) {
-      const tableDef = schema.tables.get(tableName)
+      const tableDef = resolveTable(schema, tableName)
       if (!tableDef) continue
 
       try {
@@ -149,7 +150,7 @@ export async function executeDirect(
     // Collect unique schema-qualified table names for sequence lookup
     const schemaMap = new Map<string, string[]>()
     for (const tableName of orderedTables) {
-      const tableDef = schema.tables.get(tableName)
+      const tableDef = resolveTable(schema, tableName)
       if (tableDef) {
         const tables = schemaMap.get(tableDef.schema) ?? []
         tables.push(tableDef.name)

@@ -223,12 +223,12 @@ describe('seedforge e2e', () => {
       expect(integrity[0].cnt).toBe(ROW_COUNT)
 
       // Insert order should be: countries, cities, addresses, customers
-      expect(ctx.plan.ordered.indexOf('countries'))
-        .toBeLessThan(ctx.plan.ordered.indexOf('cities'))
-      expect(ctx.plan.ordered.indexOf('cities'))
-        .toBeLessThan(ctx.plan.ordered.indexOf('addresses'))
-      expect(ctx.plan.ordered.indexOf('addresses'))
-        .toBeLessThan(ctx.plan.ordered.indexOf('customers'))
+      expect(ctx.plan.ordered.indexOf('public.countries'))
+        .toBeLessThan(ctx.plan.ordered.indexOf('public.cities'))
+      expect(ctx.plan.ordered.indexOf('public.cities'))
+        .toBeLessThan(ctx.plan.ordered.indexOf('public.addresses'))
+      expect(ctx.plan.ordered.indexOf('public.addresses'))
+        .toBeLessThan(ctx.plan.ordered.indexOf('public.customers'))
     }, 60_000)
   })
 
@@ -262,7 +262,7 @@ describe('seedforge e2e', () => {
       expect(badRefs[0].cnt).toBe(0)
 
       // Should be detected as self-ref
-      expect(ctx.plan.selfRefTables).toContain('categories')
+      expect(ctx.plan.selfRefTables).toContain('public.categories')
     }, 60_000)
   })
 
@@ -423,7 +423,7 @@ describe('seedforge e2e', () => {
       }
 
       // Product categories self-ref
-      expect(ctx.plan.selfRefTables).toContain('product_categories')
+      expect(ctx.plan.selfRefTables).toContain('public.product_categories')
 
       // Summary stats
       expect(ctx.summary.tablesSeeded).toBe(6)

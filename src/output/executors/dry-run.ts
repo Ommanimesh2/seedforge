@@ -1,5 +1,6 @@
 import type { GenerationResult } from '../../generate/types.js'
 import type { DatabaseSchema } from '../../types/schema.js'
+import { resolveTable } from '../../types/resolve.js'
 import type { OutputOptions, InsertionSummary } from '../types.js'
 import { OutputMode } from '../types.js'
 import type { ProgressReporter } from '../progress.js'
@@ -29,7 +30,7 @@ export async function executeDryRun(
       continue
     }
 
-    const tableDef = schema.tables.get(tableName)
+    const tableDef = resolveTable(schema, tableName)
     if (!tableDef) continue
 
     const rows = tableResult.rows
@@ -95,7 +96,7 @@ function countSequencesFromSchema(
 ): number {
   let count = 0
   for (const tableName of orderedTables) {
-    const tableDef = schema.tables.get(tableName)
+    const tableDef = resolveTable(schema, tableName)
     if (!tableDef) continue
     for (const [, colDef] of tableDef.columns) {
       if (colDef.isAutoIncrement) {

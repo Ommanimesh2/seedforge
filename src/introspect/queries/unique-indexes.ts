@@ -1,5 +1,6 @@
 import type pg from 'pg'
 import type { UniqueConstraintDef, IndexDef } from '../../types/index.js'
+import { parseArray } from './parse-array.js'
 
 export async function queryUniqueConstraints(
   client: pg.Client,
@@ -31,7 +32,7 @@ export async function queryUniqueConstraints(
       constraints.set(row.table_name, [])
     }
     constraints.get(row.table_name)!.push({
-      columns: row.columns,
+      columns: parseArray(row.columns),
       name: row.constraint_name,
     })
   }
@@ -75,7 +76,7 @@ export async function queryIndexes(
       indexes.set(row.table_name, [])
     }
     indexes.get(row.table_name)!.push({
-      columns: row.columns,
+      columns: parseArray(row.columns),
       name: row.index_name,
       isUnique: row.is_unique,
     })

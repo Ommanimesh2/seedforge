@@ -1,5 +1,6 @@
 import type pg from 'pg'
 import type { EnumDef } from '../../types/index.js'
+import { parseArray } from './parse-array.js'
 
 export async function queryEnums(
   client: pg.Client,
@@ -28,7 +29,7 @@ export async function queryEnums(
     enums.set(row.enum_name, {
       name: row.enum_name,
       schema: row.enum_schema,
-      values: row.enum_values,
+      values: parseArray(row.enum_values),
     })
   }
   return enums

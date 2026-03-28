@@ -60,7 +60,22 @@ export function mapColumn(
     }
   }
 
-  // 3. Normalize column name for pattern matching
+  // 3. For JSON/JSONB columns, skip name heuristics — they produce string values
+  //    that are invalid for JSON columns. Go straight to type fallback.
+  if (column.dataType === NormalizedType.JSON || column.dataType === NormalizedType.JSONB) {
+    const fallback = getTypeFallback(column)
+    return {
+      column: column.name,
+      table: tableName,
+      generator: fallback.generator,
+      confidence: ConfidenceLevel.LOW,
+      source: MappingSource.TYPE_FALLBACK,
+      fakerMethod: fallback.fakerMethod,
+      domain: 'type',
+    }
+  }
+
+  // 4. Normalize column name for pattern matching
   const lowered = column.name.toLowerCase()
   const normalized = normalizeColumnName(column.name, tableName)
   const reg = getRegistry()

@@ -11,3 +11,4 @@ export {
   type EnumDef,
   type DatabaseSchema,
 } from './schema.js'
+export { resolveTable } from './resolve.js'

@@ -130,8 +130,10 @@ describe('generateTableRows', () => {
       deferredFKColumns: new Set(),
     })
 
-    for (const row of result.rows) {
-      expect(row).not.toHaveProperty('id')
+    for (let i = 0; i < result.rows.length; i++) {
+      const row = result.rows[i]
+      // Auto-increment PK columns now get explicit sequential IDs for FK resolution
+      expect(row).toHaveProperty('id', i + 1)
       expect(row).toHaveProperty('name')
     }
   })

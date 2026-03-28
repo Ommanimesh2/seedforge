@@ -1,5 +1,6 @@
 import type pg from 'pg'
 import type { PrimaryKeyDef } from '../../types/index.js'
+import { parseArray } from './parse-array.js'
 
 export async function queryPrimaryKeys(
   client: pg.Client,
@@ -28,7 +29,7 @@ export async function queryPrimaryKeys(
   const pks = new Map<string, PrimaryKeyDef>()
   for (const row of result.rows) {
     pks.set(row.table_name, {
-      columns: row.columns,
+      columns: parseArray(row.columns),
       name: row.constraint_name,
     })
   }

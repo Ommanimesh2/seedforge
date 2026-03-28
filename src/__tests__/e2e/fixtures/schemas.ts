@@ -62,7 +62,7 @@ export const FK_CHAIN = `
 CREATE TABLE countries (
   id SERIAL PRIMARY KEY,
   name VARCHAR(100) NOT NULL UNIQUE,
-  code CHAR(2) NOT NULL UNIQUE
+  code VARCHAR(10) NOT NULL UNIQUE
 );
 
 CREATE TABLE cities (

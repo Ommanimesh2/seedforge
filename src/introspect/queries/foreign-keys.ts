@@ -1,5 +1,6 @@
 import type pg from 'pg'
 import { type ForeignKeyDef, FKAction } from '../../types/index.js'
+import { parseArray } from './parse-array.js'
 
 const FK_ACTION_MAP: Record<string, FKAction> = {
   a: FKAction.NO_ACTION,
@@ -57,10 +58,10 @@ export async function queryForeignKeys(
   for (const row of result.rows) {
     const fk: ForeignKeyDef = {
       name: row.constraint_name,
-      columns: row.columns,
+      columns: parseArray(row.columns),
       referencedTable: row.referenced_table,
       referencedSchema: row.referenced_schema,
-      referencedColumns: row.referenced_columns,
+      referencedColumns: parseArray(row.referenced_columns),
       onDelete: FK_ACTION_MAP[row.delete_action] ?? FKAction.NO_ACTION,
       onUpdate: FK_ACTION_MAP[row.update_action] ?? FKAction.NO_ACTION,
       isDeferrable: row.is_deferrable,
