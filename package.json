@@ -17,8 +17,10 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli.ts",
-    "test": "vitest run",
+    "test": "vitest run --exclude 'src/__tests__/e2e/**'",
     "test:watch": "vitest",
+    "test:e2e": "vitest run --testTimeout 120000 src/__tests__/e2e/",
+    "test:all": "vitest run --testTimeout 120000",
     "lint": "eslint src/",
     "prepublishOnly": "npm run build"
   },
@@ -48,9 +50,11 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@testcontainers/postgresql": "^11.13.0",
     "@types/pg": "^8.20.0",
     "@types/pg-format": "^1.0.5",
     "eslint": "^10.1.0",
+    "testcontainers": "^11.13.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.57.2",
