@@ -11,6 +11,7 @@ import { buildRegistry, type Registry } from './registry.js'
 import { handleEnumValues, handleCheckConstraint } from './constraint-handlers.js'
 import { createSafeEmailGenerator } from './safe-email.js'
 import { getTypeFallback } from './type-fallback.js'
+import { scoreColumn } from './token-scorer.js'
 
 // Build the registry once at module load time
 let registry: Registry | null = null
@@ -25,16 +26,18 @@ function getRegistry(): Registry {
 const safeEmailGenerator = createSafeEmailGenerator()
 
 /**
- * Maps a single column to a faker generator using the 3-tier detection algorithm:
+ * Maps a single column to a faker generator using the multi-tier detection algorithm:
  *
  * 1. Enum values (if column.enumValues is populated)
  * 2. Auto-increment / generated columns (skip)
- * 3. Exact name match (HIGH confidence)
- * 4. Suffix match (MEDIUM confidence)
- * 5. Prefix match (MEDIUM confidence)
- * 6. Pattern/regex match (MEDIUM confidence)
- * 7. CHECK constraint inferred values (HIGH confidence)
- * 8. Type-based fallback (LOW confidence)
+ * 3. JSON/JSONB/ARRAY type shortcut (skip name heuristics)
+ * 4. Exact name match (HIGH confidence)
+ * 5. Suffix match (MEDIUM confidence)
+ * 6. Prefix match (MEDIUM confidence)
+ * 7. Pattern/regex match (MEDIUM confidence)
+ * 8. Stem-based semantic match (MEDIUM confidence)
+ * 9. CHECK constraint inferred values (HIGH confidence)
+ * 10. Type-based fallback (LOW confidence)
  */
 export function mapColumn(
   column: ColumnDef,
@@ -60,9 +63,9 @@ export function mapColumn(
     }
   }
 
-  // 3. For JSON/JSONB columns, skip name heuristics — they produce string values
-  //    that are invalid for JSON columns. Go straight to type fallback.
-  if (column.dataType === NormalizedType.JSON || column.dataType === NormalizedType.JSONB) {
+  // 3. For JSON/JSONB/ARRAY columns, skip name heuristics — they produce string values
+  //    that are invalid for structured types. Go straight to type fallback.
+  if (column.dataType === NormalizedType.JSON || column.dataType === NormalizedType.JSONB || column.dataType === NormalizedType.ARRAY) {
     const fallback = getTypeFallback(column)
     return {
       column: column.name,
@@ -178,13 +181,27 @@ export function mapColumn(
     }
   }
 
-  // 8. CHECK constraint handler
+  // 8. Stem-based semantic matching — tokenize, stem, and score against domain dictionary
+  const stemResult = scoreColumn(column.name, tableName, column.dataType)
+  if (stemResult) {
+    return {
+      column: column.name,
+      table: tableName,
+      generator: stemResult.generator,
+      confidence: ConfidenceLevel.MEDIUM,
+      source: MappingSource.STEM_MATCH,
+      fakerMethod: stemResult.fakerMethod,
+      domain: stemResult.domain,
+    }
+  }
+
+  // 9. CHECK constraint handler
   const checkMapping = handleCheckConstraint(column, tableName, checkConstraints)
   if (checkMapping) {
     return checkMapping
   }
 
-  // 9. Type-based fallback
+  // 10. Type-based fallback
   const fallback = getTypeFallback(column)
   return {
     column: column.name,
