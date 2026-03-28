@@ -1,5 +1,5 @@
 {
-  "name": "seedforge",
+  "name": "@otg-dev/seedforge",
   "version": "0.1.0",
   "description": "Generate realistic seed data from your database schema",
   "type": "module",

@@ -42,13 +42,13 @@ Not random gibberish. Real-looking data.
 ## Install
 
 ```bash
-npm install -g seedforge
+npm install -g @otg-dev/seedforge
 ```
 
 Or run without installing:
 
 ```bash
-npx seedforge --db postgres://localhost/mydb
+npx @otg-dev/seedforge --db postgres://localhost/mydb
 ```
 
 ## Quick Start
