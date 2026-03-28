@@ -4,6 +4,13 @@ import { createRequire } from 'node:module'
 import { Command } from 'commander'
 import { SeedForgeError, ConfigError, redactConnectionString } from './errors/index.js'
 import { connect, disconnect, introspect } from './introspect/index.js'
+import { detectDatabaseType, DatabaseType, createAdapter } from './introspect/adapter.js'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { parseDrizzleFile } from './parsers/drizzle/index.js'
+import { parsePrismaFile } from './parsers/prisma/index.js'
+import { parseJpaDirectory } from './parsers/jpa/index.js'
+import { parseTypeORMDirectory } from './parsers/typeorm/index.js'
 import { loadAndMergeConfig } from './config/loader.js'
 import type { CliOverrides } from './config/types.js'
 import { buildInsertPlan } from './graph/index.js'
@@ -15,6 +22,10 @@ const pkg = require('../package.json') as { version: string }
 
 export interface CliOptions {
   db?: string
+  drizzle?: string
+  prisma?: string
+  jpa?: string
+  typeorm?: string
   config?: string
   count: number
   seed?: number
@@ -36,7 +47,11 @@ export function createProgram(): Command {
     .name('seedforge')
     .description('Generate realistic seed data from your database schema')
     .version(pkg.version)
-    .option('--db <url>', 'PostgreSQL connection string')
+    .option('--db <url>', 'database connection string (postgres://, mysql://, sqlite:, or .db/.sqlite path)')
+    .option('--drizzle <path>', 'path to Drizzle ORM schema file or directory')
+    .option('--prisma <path>', 'path to Prisma schema file (.prisma)')
+    .option('--jpa <path>', 'path to JPA entity classes directory')
+    .option('--typeorm <path>', 'path to TypeORM entity classes directory')
     .option('--config <path>', 'path to .seedforge.yml config file')
     .option('--count <number>', 'rows per table', (v) => parseInt(v, 10), 50)
     .option('--seed <number>', 'PRNG seed for deterministic output', (v) => parseInt(v, 10))
@@ -52,8 +67,15 @@ export function createProgram(): Command {
     .addHelpText('after', `
 Examples:
   $ seedforge --db postgres://localhost/mydb
+  $ seedforge --db mysql://root:pass@localhost/mydb
+  $ seedforge --db sqlite:./dev.db
+  $ seedforge --db ./data.sqlite --output seed.sql
   $ seedforge --db postgres://localhost/mydb --count 100 --seed 42
   $ seedforge --db postgres://localhost/mydb --output seed.sql --dry-run
+  $ seedforge --drizzle ./src/db/schema.ts --output seed.sql --dry-run
+  $ seedforge --prisma ./prisma/schema.prisma --output seed.sql
+  $ seedforge --jpa ./src/main/java/com/example/entities/ --output seed.sql --dry-run
+  $ seedforge --typeorm ./src/entities/ --output seed.sql --dry-run
   $ seedforge --config .seedforge.yml
 `)
     .action(async (options: CliOptions) => {
@@ -96,44 +118,31 @@ Examples:
         configPath: options.config,
       })
 
-      // Determine connection URL
-      const connectionUrl = mergedConfig.connection.url ?? options.db
-      if (!connectionUrl) {
-        throw new ConfigError(
-          'SF5017',
-          'No database connection URL provided',
-          [
-            'Pass --db <url> on the command line',
-            'Or set connection.url in .seedforge.yml',
-            'Or set DATABASE_URL environment variable and use ${DATABASE_URL} in config',
-          ],
-        )
-      }
-
       const effectiveSchema = mergedConfig.connection.schema ?? options.schema ?? 'public'
       const effectiveCount = mergedConfig.count
       const effectiveSeed = mergedConfig.seed
 
-      if (!options.quiet) {
-        console.log(`seedforge v${pkg.version}`)
+      // Determine connection URL
+      const connectionUrl = mergedConfig.connection.url ?? options.db
+
+      // ─── Prisma schema-file path ─────────────────────────────────
+      // Auto-detect: if no --prisma, no --db, no --drizzle, no --jpa, no --typeorm,
+      // check for prisma/schema.prisma in CWD
+      let prismaPath = options.prisma
+      if (!prismaPath && !connectionUrl && !options.drizzle && !options.jpa && !options.typeorm) {
+        const autoPath = join(process.cwd(), 'prisma', 'schema.prisma')
+        if (existsSync(autoPath)) {
+          prismaPath = autoPath
+        }
       }
 
-      if (options.debug) {
-        console.log('Options:', {
-          ...options,
-          db: redactConnectionString(connectionUrl),
-        })
-      }
+      if (prismaPath) {
+        if (!options.quiet) {
+          console.log(`seedforge v${pkg.version} (Prisma schema)`)
+          console.log(`Parsing Prisma schema: ${prismaPath}`)
+        }
 
-      // Connect and introspect
-      const client = await connect({
-        connectionString: connectionUrl,
-        schema: effectiveSchema,
-        skipProductionCheck: options.yes,
-      })
-
-      try {
-        const schema = await introspect(client, effectiveSchema)
+        const schema = parsePrismaFile(prismaPath)
 
         if (!options.quiet) {
           const tableCount = schema.tables.size
@@ -141,7 +150,7 @@ Examples:
           const fkCount = Array.from(schema.tables.values())
             .reduce((sum, t) => sum + t.foreignKeys.length, 0)
           console.log(
-            `Introspected ${tableCount} tables, ${enumCount} enums, ${fkCount} foreign keys`,
+            `Parsed ${tableCount} tables, ${enumCount} enums, ${fkCount} foreign keys`,
           )
         }
 
@@ -154,7 +163,6 @@ Examples:
         }
 
         if (options.debug) {
-          // Serialize Maps for JSON output
           const serializable = {
             ...schema,
             tables: Object.fromEntries(
@@ -168,7 +176,6 @@ Examples:
           console.log(JSON.stringify(serializable, null, 2))
         }
 
-        // Phase 3: Build insert plan (dependency graph + topological order)
         const plan = buildInsertPlan(schema)
 
         if (options.verbose && !options.quiet) {
@@ -181,48 +188,782 @@ Examples:
           }
         }
 
-        // Phase 5: Generate data
-        const mode = resolveOutputMode(options)
-        const generationClient = mode === OutputMode.DRY_RUN ? null : client
-        const generationResult = await generate(schema, plan, generationClient, {
-          globalRowCount: effectiveCount,
-          seed: effectiveSeed,
-        })
+        // If --db is also provided, connect for direct insertion
+        let client: Awaited<ReturnType<typeof connect>> | null = null
+        if (connectionUrl) {
+          client = await connect({
+            connectionString: connectionUrl,
+            schema: effectiveSchema,
+            skipProductionCheck: options.yes,
+          })
+        }
+
+        try {
+          const mode = resolveOutputMode(options)
+          const generationResult = await generate(schema, plan, client, {
+            globalRowCount: effectiveCount,
+            seed: effectiveSeed,
+          })
+
+          if (!options.quiet) {
+            const totalRows = Array.from(generationResult.tables.values())
+              .reduce((sum, t) => sum + t.rows.length, 0)
+            console.log(`Generated ${totalRows} rows across ${generationResult.tables.size} tables`)
+          }
+
+          const outputOptions = {
+            mode,
+            client: mode === OutputMode.DIRECT && client ? client : undefined,
+            filePath: options.output,
+            batchSize: 500,
+            showProgress: !options.quiet,
+            quiet: options.quiet,
+          }
+
+          const summary = await executeOutput(
+            generationResult,
+            schema,
+            plan,
+            outputOptions,
+            pkg.version,
+          )
+
+          if (options.json) {
+            const jsonSummary = {
+              ...summary,
+              rowsPerTable: Object.fromEntries(summary.rowsPerTable),
+            }
+            console.log(JSON.stringify(jsonSummary, null, 2))
+          }
+        } finally {
+          if (client) {
+            await disconnect(client)
+          }
+        }
+
+        return
+      }
+
+      // ─── Drizzle schema-file path ────────────────────────────────
+      if (options.drizzle) {
+        if (!options.quiet) {
+          console.log(`seedforge v${pkg.version} (Drizzle schema)`)
+          console.log(`Parsing Drizzle schema: ${options.drizzle}`)
+        }
+
+        if (options.debug) {
+          console.log('Options:', { ...options })
+        }
+
+        const schema = parseDrizzleFile(options.drizzle, effectiveSchema)
 
         if (!options.quiet) {
-          const totalRows = Array.from(generationResult.tables.values())
-            .reduce((sum, t) => sum + t.rows.length, 0)
-          console.log(`Generated ${totalRows} rows across ${generationResult.tables.size} tables`)
+          const tableCount = schema.tables.size
+          const enumCount = schema.enums.size
+          const fkCount = Array.from(schema.tables.values())
+            .reduce((sum, t) => sum + t.foreignKeys.length, 0)
+          console.log(
+            `Parsed ${tableCount} tables, ${enumCount} enums, ${fkCount} foreign keys from Drizzle schema`,
+          )
         }
 
-        // Phase 6: Output
-        const outputOptions = {
-          mode,
-          client: mode === OutputMode.DIRECT ? client : undefined,
-          filePath: options.output,
-          batchSize: 500,
-          showProgress: !options.quiet,
-          quiet: options.quiet,
-        }
-
-        const summary = await executeOutput(
-          generationResult,
-          schema,
-          plan,
-          outputOptions,
-          pkg.version,
-        )
-
-        // JSON output mode
-        if (options.json) {
-          const jsonSummary = {
-            ...summary,
-            rowsPerTable: Object.fromEntries(summary.rowsPerTable),
+        if (options.verbose) {
+          for (const [name, table] of schema.tables) {
+            console.log(
+              `  ${name}: ${table.columns.size} columns, ${table.foreignKeys.length} FKs`,
+            )
           }
-          console.log(JSON.stringify(jsonSummary, null, 2))
         }
-      } finally {
-        await disconnect(client)
+
+        if (options.debug) {
+          const serializable = {
+            ...schema,
+            tables: Object.fromEntries(
+              Array.from(schema.tables.entries()).map(([k, v]) => [
+                k,
+                { ...v, columns: Object.fromEntries(v.columns) },
+              ]),
+            ),
+            enums: Object.fromEntries(schema.enums),
+          }
+          console.log(JSON.stringify(serializable, null, 2))
+        }
+
+        const plan = buildInsertPlan(schema)
+
+        if (options.verbose && !options.quiet) {
+          console.log(`Insert order: ${plan.ordered.join(' -> ')}`)
+          if (plan.deferredEdges.length > 0) {
+            console.log(`Deferred edges: ${plan.deferredEdges.length}`)
+          }
+          if (plan.selfRefTables.length > 0) {
+            console.log(`Self-referencing tables: ${plan.selfRefTables.join(', ')}`)
+          }
+        }
+
+        // If --db is also provided, connect for direct insertion
+        let drizzleClient: Awaited<ReturnType<typeof connect>> | null = null
+        if (connectionUrl) {
+          drizzleClient = await connect({
+            connectionString: connectionUrl,
+            schema: effectiveSchema,
+            skipProductionCheck: options.yes,
+          })
+        }
+
+        try {
+          const mode = resolveOutputMode(options)
+          const generationClient = mode === OutputMode.DRY_RUN ? null : drizzleClient
+          const generationResult = await generate(schema, plan, generationClient, {
+            globalRowCount: effectiveCount,
+            seed: effectiveSeed,
+          })
+
+          if (!options.quiet) {
+            const totalRows = Array.from(generationResult.tables.values())
+              .reduce((sum, t) => sum + t.rows.length, 0)
+            console.log(`Generated ${totalRows} rows across ${generationResult.tables.size} tables`)
+          }
+
+          const outputOptions = {
+            mode,
+            client: mode === OutputMode.DIRECT && drizzleClient ? drizzleClient : undefined,
+            filePath: options.output,
+            batchSize: 500,
+            showProgress: !options.quiet,
+            quiet: options.quiet,
+          }
+
+          const summary = await executeOutput(
+            generationResult,
+            schema,
+            plan,
+            outputOptions,
+            pkg.version,
+          )
+
+          if (options.json) {
+            const jsonSummary = {
+              ...summary,
+              rowsPerTable: Object.fromEntries(summary.rowsPerTable),
+            }
+            console.log(JSON.stringify(jsonSummary, null, 2))
+          }
+        } finally {
+          if (drizzleClient) {
+            await disconnect(drizzleClient)
+          }
+        }
+
+        return
+      }
+
+      // ─── JPA entity path ─────────────────────────────────────────
+      if (options.jpa) {
+        if (!options.quiet) {
+          console.log(`seedforge v${pkg.version} (JPA entities)`)
+          console.log(`Parsing JPA entities: ${options.jpa}`)
+        }
+
+        if (options.debug) {
+          console.log('Options:', { ...options })
+        }
+
+        const schema = parseJpaDirectory(options.jpa, { schemaName: effectiveSchema })
+
+        if (!options.quiet) {
+          const tableCount = schema.tables.size
+          const enumCount = schema.enums.size
+          const fkCount = Array.from(schema.tables.values())
+            .reduce((sum, t) => sum + t.foreignKeys.length, 0)
+          console.log(
+            `Parsed ${tableCount} tables, ${enumCount} enums, ${fkCount} foreign keys from JPA entities`,
+          )
+        }
+
+        if (options.verbose) {
+          for (const [name, table] of schema.tables) {
+            console.log(
+              `  ${name}: ${table.columns.size} columns, ${table.foreignKeys.length} FKs`,
+            )
+          }
+        }
+
+        if (options.debug) {
+          const serializable = {
+            ...schema,
+            tables: Object.fromEntries(
+              Array.from(schema.tables.entries()).map(([k, v]) => [
+                k,
+                { ...v, columns: Object.fromEntries(v.columns) },
+              ]),
+            ),
+            enums: Object.fromEntries(schema.enums),
+          }
+          console.log(JSON.stringify(serializable, null, 2))
+        }
+
+        const plan = buildInsertPlan(schema)
+
+        if (options.verbose && !options.quiet) {
+          console.log(`Insert order: ${plan.ordered.join(' -> ')}`)
+          if (plan.deferredEdges.length > 0) {
+            console.log(`Deferred edges: ${plan.deferredEdges.length}`)
+          }
+          if (plan.selfRefTables.length > 0) {
+            console.log(`Self-referencing tables: ${plan.selfRefTables.join(', ')}`)
+          }
+        }
+
+        // If --db is also provided, connect for direct insertion
+        let jpaClient: Awaited<ReturnType<typeof connect>> | null = null
+        if (connectionUrl) {
+          jpaClient = await connect({
+            connectionString: connectionUrl,
+            schema: effectiveSchema,
+            skipProductionCheck: options.yes,
+          })
+        }
+
+        try {
+          const mode = resolveOutputMode(options)
+          const generationClient = mode === OutputMode.DRY_RUN ? null : jpaClient
+          const generationResult = await generate(schema, plan, generationClient, {
+            globalRowCount: effectiveCount,
+            seed: effectiveSeed,
+          })
+
+          if (!options.quiet) {
+            const totalRows = Array.from(generationResult.tables.values())
+              .reduce((sum, t) => sum + t.rows.length, 0)
+            console.log(`Generated ${totalRows} rows across ${generationResult.tables.size} tables`)
+          }
+
+          const outputOptions = {
+            mode,
+            client: mode === OutputMode.DIRECT && jpaClient ? jpaClient : undefined,
+            filePath: options.output,
+            batchSize: 500,
+            showProgress: !options.quiet,
+            quiet: options.quiet,
+          }
+
+          const summary = await executeOutput(
+            generationResult,
+            schema,
+            plan,
+            outputOptions,
+            pkg.version,
+          )
+
+          if (options.json) {
+            const jsonSummary = {
+              ...summary,
+              rowsPerTable: Object.fromEntries(summary.rowsPerTable),
+            }
+            console.log(JSON.stringify(jsonSummary, null, 2))
+          }
+        } finally {
+          if (jpaClient) {
+            await disconnect(jpaClient)
+          }
+        }
+
+        return
+      }
+
+      // ─── TypeORM entity path ──────────────────────────────────────
+      if (options.typeorm) {
+        if (!options.quiet) {
+          console.log(`seedforge v${pkg.version} (TypeORM entities)`)
+          console.log(`Parsing TypeORM entities: ${options.typeorm}`)
+        }
+
+        if (options.debug) {
+          console.log('Options:', { ...options })
+        }
+
+        const schema = parseTypeORMDirectory(options.typeorm)
+
+        if (!options.quiet) {
+          const tableCount = schema.tables.size
+          const enumCount = schema.enums.size
+          const fkCount = Array.from(schema.tables.values())
+            .reduce((sum, t) => sum + t.foreignKeys.length, 0)
+          console.log(
+            `Parsed ${tableCount} tables, ${enumCount} enums, ${fkCount} foreign keys from TypeORM entities`,
+          )
+        }
+
+        if (options.verbose) {
+          for (const [name, table] of schema.tables) {
+            console.log(
+              `  ${name}: ${table.columns.size} columns, ${table.foreignKeys.length} FKs`,
+            )
+          }
+        }
+
+        if (options.debug) {
+          const serializable = {
+            ...schema,
+            tables: Object.fromEntries(
+              Array.from(schema.tables.entries()).map(([k, v]) => [
+                k,
+                { ...v, columns: Object.fromEntries(v.columns) },
+              ]),
+            ),
+            enums: Object.fromEntries(schema.enums),
+          }
+          console.log(JSON.stringify(serializable, null, 2))
+        }
+
+        const plan = buildInsertPlan(schema)
+
+        if (options.verbose && !options.quiet) {
+          console.log(`Insert order: ${plan.ordered.join(' -> ')}`)
+          if (plan.deferredEdges.length > 0) {
+            console.log(`Deferred edges: ${plan.deferredEdges.length}`)
+          }
+          if (plan.selfRefTables.length > 0) {
+            console.log(`Self-referencing tables: ${plan.selfRefTables.join(', ')}`)
+          }
+        }
+
+        // If --db is also provided, connect for direct insertion
+        let typeormClient: Awaited<ReturnType<typeof connect>> | null = null
+        if (connectionUrl) {
+          typeormClient = await connect({
+            connectionString: connectionUrl,
+            schema: effectiveSchema,
+            skipProductionCheck: options.yes,
+          })
+        }
+
+        try {
+          const mode = resolveOutputMode(options)
+          const generationClient = mode === OutputMode.DRY_RUN ? null : typeormClient
+          const generationResult = await generate(schema, plan, generationClient, {
+            globalRowCount: effectiveCount,
+            seed: effectiveSeed,
+          })
+
+          if (!options.quiet) {
+            const totalRows = Array.from(generationResult.tables.values())
+              .reduce((sum, t) => sum + t.rows.length, 0)
+            console.log(`Generated ${totalRows} rows across ${generationResult.tables.size} tables`)
+          }
+
+          const outputOptions = {
+            mode,
+            client: mode === OutputMode.DIRECT && typeormClient ? typeormClient : undefined,
+            filePath: options.output,
+            batchSize: 500,
+            showProgress: !options.quiet,
+            quiet: options.quiet,
+          }
+
+          const summary = await executeOutput(
+            generationResult,
+            schema,
+            plan,
+            outputOptions,
+            pkg.version,
+          )
+
+          if (options.json) {
+            const jsonSummary = {
+              ...summary,
+              rowsPerTable: Object.fromEntries(summary.rowsPerTable),
+            }
+            console.log(JSON.stringify(jsonSummary, null, 2))
+          }
+        } finally {
+          if (typeormClient) {
+            await disconnect(typeormClient)
+          }
+        }
+
+        return
+      }
+
+      // ─── DB introspection path ───────────────────────────────────
+      if (!connectionUrl) {
+        throw new ConfigError(
+          'SF5017',
+          'No database connection URL provided',
+          [
+            'Pass --db <url> on the command line',
+            'Or use --drizzle <path> to parse a Drizzle schema file',
+            'Or use --prisma <path> to parse a Prisma schema file',
+            'Or use --jpa <path> to parse JPA entity classes',
+            'Or use --typeorm <path> to parse TypeORM entity classes',
+            'Or set connection.url in .seedforge.yml',
+            'Or set DATABASE_URL environment variable and use ${DATABASE_URL} in config',
+          ],
+        )
+      }
+
+      // Detect database type from connection URL scheme
+      const dbType = detectDatabaseType(connectionUrl)
+
+      if (!options.quiet) {
+        const dbLabelMap: Record<string, string> = {
+          [DatabaseType.POSTGRES]: 'PostgreSQL',
+          [DatabaseType.MYSQL]: 'MySQL',
+          [DatabaseType.SQLITE]: 'SQLite',
+        }
+        const dbLabel = dbLabelMap[dbType] ?? dbType
+        console.log(`seedforge v${pkg.version} (${dbLabel})`)
+      }
+
+      if (options.debug) {
+        console.log('Options:', {
+          ...options,
+          db: redactConnectionString(connectionUrl),
+        })
+      }
+
+      if (dbType === DatabaseType.SQLITE) {
+        // ─── SQLite path ────────────────────────────────────────────────
+        const { connectSqlite, disconnectSqlite, extractSqlitePath } = await import('./introspect/sqlite/connection.js')
+        const { introspectSqlite } = await import('./introspect/sqlite/introspect.js')
+        const { executeSqliteDirect } = await import('./output/executors/sqlite-direct.js')
+
+        const filePath = extractSqlitePath(connectionUrl)
+        const sqliteDb = connectSqlite(filePath)
+
+        try {
+          const schema = introspectSqlite(sqliteDb, filePath)
+
+          if (!options.quiet) {
+            const tableCount = schema.tables.size
+            const enumCount = schema.enums.size
+            const fkCount = Array.from(schema.tables.values())
+              .reduce((sum, t) => sum + t.foreignKeys.length, 0)
+            console.log(
+              `Introspected ${tableCount} tables, ${enumCount} enums, ${fkCount} foreign keys`,
+            )
+          }
+
+          if (options.verbose) {
+            for (const [name, table] of schema.tables) {
+              console.log(
+                `  ${name}: ${table.columns.size} columns, ${table.foreignKeys.length} FKs`,
+              )
+            }
+          }
+
+          if (options.debug) {
+            const serializable = {
+              ...schema,
+              tables: Object.fromEntries(
+                Array.from(schema.tables.entries()).map(([k, v]) => [
+                  k,
+                  { ...v, columns: Object.fromEntries(v.columns) },
+                ]),
+              ),
+              enums: Object.fromEntries(schema.enums),
+            }
+            console.log(JSON.stringify(serializable, null, 2))
+          }
+
+          const plan = buildInsertPlan(schema)
+
+          if (options.verbose && !options.quiet) {
+            console.log(`Insert order: ${plan.ordered.join(' -> ')}`)
+            if (plan.deferredEdges.length > 0) {
+              console.log(`Deferred edges: ${plan.deferredEdges.length}`)
+            }
+            if (plan.selfRefTables.length > 0) {
+              console.log(`Self-referencing tables: ${plan.selfRefTables.join(', ')}`)
+            }
+          }
+
+          const mode = resolveOutputMode(options)
+          const generationResult = await generate(schema, plan, null, {
+            globalRowCount: effectiveCount,
+            seed: effectiveSeed,
+          })
+
+          if (!options.quiet) {
+            const totalRows = Array.from(generationResult.tables.values())
+              .reduce((sum, t) => sum + t.rows.length, 0)
+            console.log(`Generated ${totalRows} rows across ${generationResult.tables.size} tables`)
+          }
+
+          if (mode === OutputMode.DIRECT) {
+            const { ProgressReporter } = await import('./output/progress.js')
+            const progress = new ProgressReporter({
+              quiet: options.quiet,
+              showProgress: !options.quiet,
+            })
+            const summary = executeSqliteDirect(
+              generationResult,
+              schema,
+              plan.ordered,
+              sqliteDb,
+              500,
+              progress,
+            )
+            progress.printSummary(summary)
+
+            if (options.json) {
+              const jsonSummary = {
+                ...summary,
+                rowsPerTable: Object.fromEntries(summary.rowsPerTable),
+              }
+              console.log(JSON.stringify(jsonSummary, null, 2))
+            }
+          } else {
+            const outputOptions = {
+              mode,
+              filePath: options.output,
+              batchSize: 500,
+              showProgress: !options.quiet,
+              quiet: options.quiet,
+            }
+
+            const summary = await executeOutput(
+              generationResult,
+              schema,
+              plan,
+              outputOptions,
+              pkg.version,
+            )
+
+            if (options.json) {
+              const jsonSummary = {
+                ...summary,
+                rowsPerTable: Object.fromEntries(summary.rowsPerTable),
+              }
+              console.log(JSON.stringify(jsonSummary, null, 2))
+            }
+          }
+        } finally {
+          disconnectSqlite(sqliteDb)
+        }
+      } else if (dbType === DatabaseType.MYSQL) {
+        // ─── MySQL path ───────────────────────────────────────────────
+        const adapter = await createAdapter(DatabaseType.MYSQL)
+        const connection = await adapter.connect({
+          connectionString: connectionUrl,
+          schema: effectiveSchema,
+          skipProductionCheck: options.yes,
+        })
+
+        try {
+          // For MySQL, the "schema" is the database name
+          const mysqlDb = extractMysqlDatabase(connectionUrl, effectiveSchema)
+          const schema = await adapter.introspect(connection, mysqlDb)
+
+          if (!options.quiet) {
+            const tableCount = schema.tables.size
+            const enumCount = schema.enums.size
+            const fkCount = Array.from(schema.tables.values())
+              .reduce((sum, t) => sum + t.foreignKeys.length, 0)
+            console.log(
+              `Introspected ${tableCount} tables, ${enumCount} enums, ${fkCount} foreign keys`,
+            )
+          }
+
+          if (options.verbose) {
+            for (const [name, table] of schema.tables) {
+              console.log(
+                `  ${name}: ${table.columns.size} columns, ${table.foreignKeys.length} FKs`,
+              )
+            }
+          }
+
+          if (options.debug) {
+            const serializable = {
+              ...schema,
+              tables: Object.fromEntries(
+                Array.from(schema.tables.entries()).map(([k, v]) => [
+                  k,
+                  { ...v, columns: Object.fromEntries(v.columns) },
+                ]),
+              ),
+              enums: Object.fromEntries(schema.enums),
+            }
+            console.log(JSON.stringify(serializable, null, 2))
+          }
+
+          const plan = buildInsertPlan(schema)
+
+          if (options.verbose && !options.quiet) {
+            console.log(`Insert order: ${plan.ordered.join(' -> ')}`)
+            if (plan.deferredEdges.length > 0) {
+              console.log(`Deferred edges: ${plan.deferredEdges.length}`)
+            }
+            if (plan.selfRefTables.length > 0) {
+              console.log(`Self-referencing tables: ${plan.selfRefTables.join(', ')}`)
+            }
+          }
+
+          // Generate data (no live-DB client for generation queries in MySQL path for now)
+          const mode = resolveOutputMode(options)
+          const generationResult = await generate(schema, plan, null, {
+            globalRowCount: effectiveCount,
+            seed: effectiveSeed,
+          })
+
+          if (!options.quiet) {
+            const totalRows = Array.from(generationResult.tables.values())
+              .reduce((sum, t) => sum + t.rows.length, 0)
+            console.log(`Generated ${totalRows} rows across ${generationResult.tables.size} tables`)
+          }
+
+          // Output
+          if (mode === OutputMode.DIRECT) {
+            // Use the MySQL executor directly
+            const { executeMysqlDirect } = await import('./output/executors/mysql-direct.js')
+            const { ProgressReporter } = await import('./output/progress.js')
+            const progress = new ProgressReporter({
+              quiet: options.quiet,
+              showProgress: !options.quiet,
+            })
+            const mysqlConn = connection as import('mysql2/promise').Connection
+            const summary = await executeMysqlDirect(
+              generationResult,
+              schema,
+              plan.ordered,
+              mysqlConn,
+              500,
+              progress,
+            )
+            progress.printSummary(summary)
+
+            if (options.json) {
+              const jsonSummary = {
+                ...summary,
+                rowsPerTable: Object.fromEntries(summary.rowsPerTable),
+              }
+              console.log(JSON.stringify(jsonSummary, null, 2))
+            }
+          } else {
+            // FILE or DRY_RUN modes use the existing output layer (SQL is PG-flavored but functional)
+            const outputOptions = {
+              mode,
+              filePath: options.output,
+              batchSize: 500,
+              showProgress: !options.quiet,
+              quiet: options.quiet,
+            }
+
+            const summary = await executeOutput(
+              generationResult,
+              schema,
+              plan,
+              outputOptions,
+              pkg.version,
+            )
+
+            if (options.json) {
+              const jsonSummary = {
+                ...summary,
+                rowsPerTable: Object.fromEntries(summary.rowsPerTable),
+              }
+              console.log(JSON.stringify(jsonSummary, null, 2))
+            }
+          }
+        } finally {
+          await adapter.disconnect(connection)
+        }
+      } else {
+        // ─── PostgreSQL path (existing) ──────────────────────────────
+        const client = await connect({
+          connectionString: connectionUrl,
+          schema: effectiveSchema,
+          skipProductionCheck: options.yes,
+        })
+
+        try {
+          const schema = await introspect(client, effectiveSchema)
+
+          if (!options.quiet) {
+            const tableCount = schema.tables.size
+            const enumCount = schema.enums.size
+            const fkCount = Array.from(schema.tables.values())
+              .reduce((sum, t) => sum + t.foreignKeys.length, 0)
+            console.log(
+              `Introspected ${tableCount} tables, ${enumCount} enums, ${fkCount} foreign keys`,
+            )
+          }
+
+          if (options.verbose) {
+            for (const [name, table] of schema.tables) {
+              console.log(
+                `  ${name}: ${table.columns.size} columns, ${table.foreignKeys.length} FKs`,
+              )
+            }
+          }
+
+          if (options.debug) {
+            const serializable = {
+              ...schema,
+              tables: Object.fromEntries(
+                Array.from(schema.tables.entries()).map(([k, v]) => [
+                  k,
+                  { ...v, columns: Object.fromEntries(v.columns) },
+                ]),
+              ),
+              enums: Object.fromEntries(schema.enums),
+            }
+            console.log(JSON.stringify(serializable, null, 2))
+          }
+
+          const plan = buildInsertPlan(schema)
+
+          if (options.verbose && !options.quiet) {
+            console.log(`Insert order: ${plan.ordered.join(' -> ')}`)
+            if (plan.deferredEdges.length > 0) {
+              console.log(`Deferred edges: ${plan.deferredEdges.length}`)
+            }
+            if (plan.selfRefTables.length > 0) {
+              console.log(`Self-referencing tables: ${plan.selfRefTables.join(', ')}`)
+            }
+          }
+
+          const mode = resolveOutputMode(options)
+          const generationClient = mode === OutputMode.DRY_RUN ? null : client
+          const generationResult = await generate(schema, plan, generationClient, {
+            globalRowCount: effectiveCount,
+            seed: effectiveSeed,
+          })
+
+          if (!options.quiet) {
+            const totalRows = Array.from(generationResult.tables.values())
+              .reduce((sum, t) => sum + t.rows.length, 0)
+            console.log(`Generated ${totalRows} rows across ${generationResult.tables.size} tables`)
+          }
+
+          const outputOptions = {
+            mode,
+            client: mode === OutputMode.DIRECT ? client : undefined,
+            filePath: options.output,
+            batchSize: 500,
+            showProgress: !options.quiet,
+            quiet: options.quiet,
+          }
+
+          const summary = await executeOutput(
+            generationResult,
+            schema,
+            plan,
+            outputOptions,
+            pkg.version,
+          )
+
+          if (options.json) {
+            const jsonSummary = {
+              ...summary,
+              rowsPerTable: Object.fromEntries(summary.rowsPerTable),
+            }
+            console.log(JSON.stringify(jsonSummary, null, 2))
+          }
+        } finally {
+          await disconnect(client)
+        }
       }
     })
 
@@ -244,6 +985,20 @@ async function main(): Promise<void> {
       process.exit(1)
     }
     process.exit(2)
+  }
+}
+
+/**
+ * Extract the database name from a MySQL connection URL.
+ * Falls back to the effectiveSchema if extraction fails.
+ */
+function extractMysqlDatabase(connectionUrl: string, fallback: string): string {
+  try {
+    const parsed = new URL(connectionUrl)
+    const dbName = parsed.pathname.replace(/^\//, '')
+    return dbName || fallback
+  } catch {
+    return fallback
   }
 }
 
