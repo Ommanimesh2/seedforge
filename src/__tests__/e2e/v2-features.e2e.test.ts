@@ -73,9 +73,9 @@ describe('seedforge v2 e2e', () => {
 
     it('respects type guardrails — JSONB skips stem matching', () => {
       // JSONB columns should NOT go through stem scorer (handled by mapper)
-      const result = scoreColumn('financial_data', 'reports', NormalizedType.JSONB)
-      // scoreColumn itself may return a match, but the mapper skips it for JSONB
-      // Verify that at least the function runs without error
+      // scoreColumn may still return a domain match for JSONB, but the mapper
+      // skips it — verify the function at least runs without error
+      scoreColumn('financial_data', 'reports', NormalizedType.JSONB)
       expect(true).toBe(true)
     })
 
@@ -655,8 +655,8 @@ describe('seedforge v2 e2e', () => {
         }
       `
 
-      // Parse schema
-      const schema = parsePrismaSchema(prismaSchema)
+      // Parse schema (verifies Prisma parsing works)
+      parsePrismaSchema(prismaSchema)
 
       // Create matching tables in real PG
       const ctx = await createFreshDb(container, `
