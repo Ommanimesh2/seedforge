@@ -2,7 +2,7 @@
 
 import { createRequire } from 'node:module'
 import { Command } from 'commander'
-import { SeedForgeError, ConfigError, redactConnectionString } from './errors/index.js'
+import { SeedForgeError, ConfigError, PluginError, redactConnectionString } from './errors/index.js'
 import { connect, disconnect, introspect } from './introspect/index.js'
 import { detectDatabaseType, DatabaseType, createAdapter } from './introspect/adapter.js'
 import { existsSync } from 'node:fs'
@@ -12,6 +12,7 @@ import { parsePrismaFile } from './parsers/prisma/index.js'
 import { parseJpaDirectory } from './parsers/jpa/index.js'
 import { parseTypeORMDirectory } from './parsers/typeorm/index.js'
 import { loadAndMergeConfig } from './config/loader.js'
+import { PluginRegistry, loadSinglePlugin } from './plugins/index.js'
 import type { CliOverrides } from './config/types.js'
 import { buildInsertPlan } from './graph/index.js'
 import { generate } from './generate/index.js'
@@ -26,6 +27,7 @@ export interface CliOptions {
   prisma?: string
   jpa?: string
   typeorm?: string
+  plugin?: string[]
   config?: string
   count: number
   seed?: number
@@ -38,6 +40,7 @@ export interface CliOptions {
   debug: boolean
   json: boolean
   yes: boolean
+  fast: boolean
 }
 
 export function createProgram(): Command {
@@ -52,6 +55,7 @@ export function createProgram(): Command {
     .option('--prisma <path>', 'path to Prisma schema file (.prisma)')
     .option('--jpa <path>', 'path to JPA entity classes directory')
     .option('--typeorm <path>', 'path to TypeORM entity classes directory')
+    .option('--plugin <paths...>', 'paths to plugin modules to load')
     .option('--config <path>', 'path to .seedforge.yml config file')
     .option('--count <number>', 'rows per table', (v) => parseInt(v, 10), 50)
     .option('--seed <number>', 'PRNG seed for deterministic output', (v) => parseInt(v, 10))
@@ -64,6 +68,7 @@ export function createProgram(): Command {
     .option('--debug', 'debug logging', false)
     .option('--json', 'machine-readable JSON output', false)
     .option('--yes', 'skip confirmation prompts', false)
+    .option('--fast', 'use COPY-based insertion for PostgreSQL (faster for large datasets)', false)
     .addHelpText('after', `
 Examples:
   $ seedforge --db postgres://localhost/mydb
@@ -124,6 +129,93 @@ Examples:
 
       // Determine connection URL
       const connectionUrl = mergedConfig.connection.url ?? options.db
+
+      // ─── Plugin loading ──────────────────────────────────────────
+      const pluginRegistry = new PluginRegistry()
+      if (options.plugin && options.plugin.length > 0) {
+        for (const pluginPath of options.plugin) {
+          try {
+            const loaded = await loadSinglePlugin(pluginPath, process.cwd())
+            pluginRegistry.register(loaded)
+            if (options.verbose && !options.quiet) {
+              console.log(`Loaded plugin: ${loaded.plugin.name} v${loaded.plugin.version} (${loaded.type})`)
+            }
+          } catch (err) {
+            if (err instanceof PluginError) {
+              throw err
+            }
+            const detail = err instanceof Error ? err.message : String(err)
+            throw new PluginError(
+              'SF6001',
+              `Failed to load plugin: ${pluginPath}`,
+              ['Check the plugin path is correct and the module is valid'],
+              { pluginPath, detail },
+            )
+          }
+        }
+      }
+
+      // ─── Try parser plugin auto-detection ────────────────────────
+      if (!connectionUrl && !options.drizzle && !options.prisma && !options.jpa && !options.typeorm) {
+        const detectedParser = await pluginRegistry.detectParser(process.cwd())
+        if (detectedParser) {
+          if (!options.quiet) {
+            console.log(`seedforge v${pkg.version} (plugin: ${detectedParser.name})`)
+            console.log(`Parsing schema with plugin: ${detectedParser.name}`)
+          }
+
+          const schema = await detectedParser.parse(process.cwd())
+
+          if (!options.quiet) {
+            const tableCount = schema.tables.size
+            const enumCount = schema.enums.size
+            const fkCount = Array.from(schema.tables.values())
+              .reduce((sum, t) => sum + t.foreignKeys.length, 0)
+            console.log(
+              `Parsed ${tableCount} tables, ${enumCount} enums, ${fkCount} foreign keys`,
+            )
+          }
+
+          const plan = buildInsertPlan(schema)
+          const mode = resolveOutputMode(options)
+          const generationResult = await generate(schema, plan, null, {
+            globalRowCount: effectiveCount,
+            seed: effectiveSeed,
+          })
+
+          if (!options.quiet) {
+            const totalRows = Array.from(generationResult.tables.values())
+              .reduce((sum, t) => sum + t.rows.length, 0)
+            console.log(`Generated ${totalRows} rows across ${generationResult.tables.size} tables`)
+          }
+
+          const outputOptions = {
+            mode,
+            filePath: options.output,
+            batchSize: 500,
+            showProgress: !options.quiet,
+            quiet: options.quiet,
+          }
+
+          const summary = await executeOutput(
+            generationResult,
+            schema,
+            plan,
+            outputOptions,
+            pkg.version,
+          )
+
+          if (options.json) {
+            const jsonSummary = {
+              ...summary,
+              rowsPerTable: Object.fromEntries(summary.rowsPerTable),
+            }
+            console.log(JSON.stringify(jsonSummary, null, 2))
+          }
+
+          return
+        }
+      }
 
       // ─── Prisma schema-file path ─────────────────────────────────
       // Auto-detect: if no --prisma, no --db, no --drizzle, no --jpa, no --typeorm,
@@ -606,6 +698,18 @@ Examples:
       // Detect database type from connection URL scheme
       const dbType = detectDatabaseType(connectionUrl)
 
+      // Validate --fast flag: only supported with PostgreSQL
+      if (options.fast && dbType !== DatabaseType.POSTGRES) {
+        throw new ConfigError(
+          'SF5019',
+          'The --fast flag is only supported with PostgreSQL databases',
+          [
+            'Remove the --fast flag to use standard batched INSERTs',
+            'The --fast flag uses PostgreSQL COPY protocol which is not available for other databases',
+          ],
+        )
+      }
+
       if (!options.quiet) {
         const dbLabelMap: Record<string, string> = {
           [DatabaseType.POSTGRES]: 'PostgreSQL',
@@ -944,6 +1048,7 @@ Examples:
             batchSize: 500,
             showProgress: !options.quiet,
             quiet: options.quiet,
+            fast: options.fast,
           }
 
           const summary = await executeOutput(

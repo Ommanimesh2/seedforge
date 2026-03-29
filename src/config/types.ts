@@ -10,6 +10,7 @@ export interface ColumnOverride {
   nullable?: number
   values?: unknown[]
   weights?: number[]
+  distribution?: string
 }
 
 export interface TableConfig {
@@ -27,6 +28,14 @@ export interface ConnectionConfig {
   schema?: string
 }
 
+export interface ScenarioTableConfig {
+  count: number
+}
+
+export interface ScenarioDef {
+  tables: Record<string, ScenarioTableConfig>
+}
+
 export interface SeedforgeConfig {
   connection: ConnectionConfig
   seed?: number
@@ -36,6 +45,7 @@ export interface SeedforgeConfig {
   tables: Record<string, TableConfig>
   exclude: string[]
   virtualForeignKeys: VirtualForeignKey[]
+  scenarios?: Record<string, ScenarioDef>
 }
 
 export interface CliOverrides {
@@ -46,6 +56,8 @@ export interface CliOverrides {
   exclude?: string[]
   dryRun?: boolean
   output?: string
+  scenario?: string
+  diff?: boolean
 }
 
 export interface LoadConfigOptions {

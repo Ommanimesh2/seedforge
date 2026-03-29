@@ -20,3 +20,9 @@ export {
   buildSequenceResetSQL,
   buildTransactionWrapper,
 } from './sql-builder.js'
+
+// Auto-batch tuning
+export { calculateOptimalBatchSize } from './auto-batch.js'
+
+// PG COPY executor (for direct import)
+export { executePgCopy, formatCopyValue, rowToCsvLine } from './executors/pg-copy.js'

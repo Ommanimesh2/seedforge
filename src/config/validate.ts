@@ -6,9 +6,11 @@ import type {
   TableConfig,
   VirtualForeignKey,
   ConnectionConfig,
+  ScenarioDef,
 } from './types.js'
 import { createDefaultConfig } from './defaults.js'
 import { suggestKey } from './levenshtein.js'
+import { isValidDistributionType } from '../generate/distributions.js'
 
 const VALID_TOP_LEVEL_KEYS = [
   'connection',
@@ -19,6 +21,7 @@ const VALID_TOP_LEVEL_KEYS = [
   'tables',
   'exclude',
   'virtualForeignKeys',
+  'scenarios',
 ]
 
 const VALID_CONNECTION_KEYS = ['url', 'schema']
@@ -29,6 +32,7 @@ const VALID_COLUMN_OVERRIDE_KEYS = [
   'nullable',
   'values',
   'weights',
+  'distribution',
 ]
 const VALID_EXISTING_DATA_KEYS = ['mode']
 
@@ -208,6 +212,18 @@ function validateColumnOverride(
     }
 
     override.weights = raw.weights as number[]
+  }
+
+  if (raw.distribution !== undefined) {
+    if (typeof raw.distribution !== 'string' || !isValidDistributionType(raw.distribution)) {
+      throw new ConfigError(
+        'SF5020',
+        `Invalid distribution "${raw.distribution}" for ${table}.${column}. Must be one of: uniform, zipf, normal, exponential`,
+        ['Valid distribution types: uniform, zipf, normal, exponential'],
+        { table, column, distribution: raw.distribution },
+      )
+    }
+    override.distribution = raw.distribution
   }
 
   // Mutual exclusion check
@@ -466,5 +482,89 @@ export function validateConfig(
     )
   }
 
+  // scenarios
+  if (raw.scenarios !== undefined) {
+    config.scenarios = validateScenariosSection(raw.scenarios)
+  }
+
   return config
+}
+
+/**
+ * Validates the scenarios section of the config.
+ */
+function validateScenariosSection(
+  raw: unknown,
+): Record<string, ScenarioDef> {
+  if (!isPlainObject(raw)) {
+    throw new ConfigError(
+      'SF5019',
+      '"scenarios" must be an object keyed by scenario name',
+      ['Example: scenarios: { empty_store: { tables: { users: { count: 5 } } } }'],
+    )
+  }
+
+  const scenarios: Record<string, ScenarioDef> = {}
+
+  for (const [scenarioName, scenarioRaw] of Object.entries(raw)) {
+    if (!isPlainObject(scenarioRaw)) {
+      throw new ConfigError(
+        'SF5019',
+        `Scenario "${scenarioName}" must be an object with a "tables" key`,
+        [],
+        { scenario: scenarioName },
+      )
+    }
+
+    if (scenarioRaw.tables === undefined) {
+      throw new ConfigError(
+        'SF5019',
+        `Scenario "${scenarioName}" must have a "tables" key`,
+        ['Example: scenarios: { my_scenario: { tables: { users: { count: 10 } } } }'],
+        { scenario: scenarioName },
+      )
+    }
+
+    if (!isPlainObject(scenarioRaw.tables)) {
+      throw new ConfigError(
+        'SF5019',
+        `Scenario "${scenarioName}.tables" must be an object keyed by table name`,
+        [],
+        { scenario: scenarioName },
+      )
+    }
+
+    const tables: Record<string, { count: number }> = {}
+
+    for (const [tableName, tableRaw] of Object.entries(scenarioRaw.tables as Record<string, unknown>)) {
+      if (!isPlainObject(tableRaw)) {
+        throw new ConfigError(
+          'SF5019',
+          `Scenario "${scenarioName}.tables.${tableName}" must be an object with a "count" key`,
+          [],
+          { scenario: scenarioName, table: tableName },
+        )
+      }
+
+      if (
+        (tableRaw as Record<string, unknown>).count === undefined ||
+        typeof (tableRaw as Record<string, unknown>).count !== 'number' ||
+        !Number.isInteger((tableRaw as Record<string, unknown>).count) ||
+        ((tableRaw as Record<string, unknown>).count as number) < 0
+      ) {
+        throw new ConfigError(
+          'SF5019',
+          `Scenario "${scenarioName}.tables.${tableName}.count" must be a non-negative integer`,
+          ['Use 0 to generate no rows for this table'],
+          { scenario: scenarioName, table: tableName, value: (tableRaw as Record<string, unknown>).count },
+        )
+      }
+
+      tables[tableName] = { count: (tableRaw as Record<string, unknown>).count as number }
+    }
+
+    scenarios[scenarioName] = { tables }
+  }
+
+  return scenarios
 }

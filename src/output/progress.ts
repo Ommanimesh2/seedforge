@@ -19,6 +19,7 @@ export function isColorEnabled(): boolean {
  * Simple progress reporter that writes to stderr.
  * TTY-aware: uses \\r overwrite when interactive, newlines when piped.
  * Respects NO_COLOR and FORCE_COLOR environment variables.
+ * Tracks insertion rate and calculates ETA for remaining rows.
  */
 export class ProgressReporter {
   private readonly quiet: boolean
@@ -26,6 +27,7 @@ export class ProgressReporter {
   private readonly isTTY: boolean
   private readonly colorEnabled: boolean
   private lastUpdateTime: Map<string, number> = new Map()
+  private tableStartTime: Map<string, number> = new Map()
   private static readonly THROTTLE_MS = 100
 
   constructor(options: { quiet: boolean; showProgress: boolean }) {
@@ -41,11 +43,13 @@ export class ProgressReporter {
   startTable(tableName: string, totalRows: number): void {
     if (this.quiet || !this.showProgress) return
     this.lastUpdateTime.set(tableName, 0)
+    this.tableStartTime.set(tableName, Date.now())
     this.writeProgress(`  ${tableName}: 0/${totalRows} rows`)
   }
 
   /**
    * Update progress for a table. Throttled to avoid flooding stderr.
+   * Includes insertion rate (rows/s) and ETA when enough data is available.
    */
   updateTable(tableName: string, insertedRows: number, totalRows: number): void {
     if (this.quiet || !this.showProgress) return
@@ -57,7 +61,7 @@ export class ProgressReporter {
     }
     this.lastUpdateTime.set(tableName, now)
 
-    const msg = `  ${tableName}: ${insertedRows}/${totalRows} rows`
+    const msg = this.formatProgressMessage(tableName, insertedRows, totalRows, now)
     if (this.isTTY) {
       process.stderr.write(`\r${msg}`)
     } else {
@@ -70,12 +74,18 @@ export class ProgressReporter {
    */
   finishTable(tableName: string, totalRows: number, elapsedMs: number): void {
     if (this.quiet || !this.showProgress) return
-    const msg = `  ${tableName}: ${totalRows}/${totalRows} rows (${elapsedMs}ms)`
+    const rateStr = elapsedMs > 0
+      ? ` [${Math.round((totalRows / elapsedMs) * 1000)} rows/s]`
+      : ''
+    const msg = `  ${tableName}: ${totalRows}/${totalRows} rows${rateStr} (${elapsedMs}ms)`
     if (this.isTTY) {
       process.stderr.write(`\r${msg}\n`)
     } else {
       process.stderr.write(`${msg}\n`)
     }
+    // Clean up tracking state
+    this.tableStartTime.delete(tableName)
+    this.lastUpdateTime.delete(tableName)
   }
 
   /**
@@ -112,6 +122,28 @@ export class ProgressReporter {
     }
 
     process.stderr.write(lines.join('\n') + '\n')
+  }
+
+  /**
+   * Format a progress message with rate and ETA information.
+   */
+  private formatProgressMessage(
+    tableName: string,
+    insertedRows: number,
+    totalRows: number,
+    now: number,
+  ): string {
+    const startTime = this.tableStartTime.get(tableName)
+    if (!startTime || insertedRows === 0) {
+      return `  ${tableName}: ${insertedRows}/${totalRows} rows`
+    }
+
+    const elapsedMs = now - startTime
+    const rowsPerSecond = Math.round((insertedRows / elapsedMs) * 1000)
+    const remainingRows = totalRows - insertedRows
+    const etaSeconds = rowsPerSecond > 0 ? Math.ceil(remainingRows / rowsPerSecond) : 0
+
+    return `  ${tableName}: ${insertedRows}/${totalRows} rows [${rowsPerSecond} rows/s, ETA ${etaSeconds}s]`
   }
 
   private writeProgress(msg: string): void {

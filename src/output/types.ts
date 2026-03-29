@@ -28,6 +28,8 @@ export interface OutputOptions {
   showProgress: boolean
   /** Suppress all non-essential output (default: false) */
   quiet: boolean
+  /** Use COPY-based insertion for PostgreSQL (default: false) */
+  fast?: boolean
 }
 
 /**

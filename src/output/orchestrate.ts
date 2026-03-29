@@ -76,13 +76,25 @@ export async function executeOutput(
 
   switch (options.mode) {
     case OutputMode.DIRECT:
-      summary = await executeDirect(
-        generationResult,
-        schema,
-        plan.ordered,
-        clampedOptions,
-        progress,
-      )
+      if (options.fast) {
+        // Use COPY-based insertion (PostgreSQL only)
+        const { executePgCopy } = await import('./executors/pg-copy.js')
+        summary = await executePgCopy(
+          generationResult,
+          schema,
+          plan.ordered,
+          clampedOptions,
+          progress,
+        )
+      } else {
+        summary = await executeDirect(
+          generationResult,
+          schema,
+          plan.ordered,
+          clampedOptions,
+          progress,
+        )
+      }
       break
     case OutputMode.FILE:
       summary = await executeFile(
