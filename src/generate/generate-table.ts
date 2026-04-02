@@ -207,19 +207,32 @@ export function generateTableRows(
 
       // f. Handle unique columns
       if (uniqueColumns.has(columnName)) {
-        const value = uniqueTracker.generateUnique(
+        let value = uniqueTracker.generateUnique(
           qualifiedName,
           columnName,
           generator,
           faker,
           i,
         )
+
+        // Truncate strings to respect VARCHAR/CHAR maxLength
+        if (column.maxLength && typeof value === 'string' && value.length > column.maxLength) {
+          value = value.substring(0, column.maxLength).trimEnd()
+        }
+
         row[columnName] = value
         continue
       }
 
       // g. Default generation
-      row[columnName] = generator(faker, i)
+      let value = generator(faker, i)
+
+      // Truncate strings to respect VARCHAR/CHAR maxLength
+      if (column.maxLength && typeof value === 'string' && value.length > column.maxLength) {
+        value = value.substring(0, column.maxLength).trimEnd()
+      }
+
+      row[columnName] = value
     }
 
     rows.push(row)

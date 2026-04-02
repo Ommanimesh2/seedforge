@@ -19,15 +19,12 @@ export async function introspect(
     // Step 2: Fetch tables + columns (needs enum map)
     const tables = await queryTables(client, schema, enums)
 
-    // Step 3: Fetch constraints in parallel
-    const [primaryKeys, foreignKeys, uniqueConstraints, indexes, checkConstraints] =
-      await Promise.all([
-        queryPrimaryKeys(client, schema),
-        queryForeignKeys(client, schema),
-        queryUniqueConstraints(client, schema),
-        queryIndexes(client, schema),
-        queryCheckConstraints(client, schema),
-      ])
+    // Step 3: Fetch constraints sequentially (pg client supports one query at a time)
+    const primaryKeys = await queryPrimaryKeys(client, schema)
+    const foreignKeys = await queryForeignKeys(client, schema)
+    const uniqueConstraints = await queryUniqueConstraints(client, schema)
+    const indexes = await queryIndexes(client, schema)
+    const checkConstraints = await queryCheckConstraints(client, schema)
 
     // Step 4: Merge results into tables
     for (const [tableName, table] of tables) {

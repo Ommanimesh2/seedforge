@@ -59,10 +59,8 @@ export async function findSequences(
       ORDER BY c.relname, a.attname;
     `
 
-    const [serialResult, identityResult] = await Promise.all([
-      client.query(serialQuery, [schema, tableNames]),
-      client.query(identityQuery, [schema, tableNames]),
-    ])
+    const serialResult = await client.query(serialQuery, [schema, tableNames])
+    const identityResult = await client.query(identityQuery, [schema, tableNames])
 
     // Merge and deduplicate by (table, column) pair
     const seen = new Set<string>()

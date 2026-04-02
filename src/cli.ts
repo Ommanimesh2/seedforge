@@ -1107,7 +1107,9 @@ function extractMysqlDatabase(connectionUrl: string, fallback: string): string {
   }
 }
 
-const isDirectRun = process.argv[1] && /cli\.[jt]s/.test(process.argv[1])
+const isDirectRun =
+  process.argv[1] &&
+  (/cli\.[jt]s/.test(process.argv[1]) || /seedforge$/.test(process.argv[1]))
 if (isDirectRun) {
   main()
 }
