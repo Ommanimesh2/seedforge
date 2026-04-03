@@ -7,7 +7,7 @@ import type {
   GenerationResult,
   ExistingData,
 } from './types.js'
-import { createGenerationConfig } from './config.js'
+import { createGenerationConfig, getRowCount } from './config.js'
 import { createSeededFaker } from '../mapping/seeded-faker.js'
 import { mapTable } from '../mapping/mapper.js'
 import { ReferencePoolManager } from './reference-pool.js'
@@ -15,6 +15,7 @@ import { UniqueTracker } from './unique-tracker.js'
 import { queryExistingData } from './existing-data.js'
 import { generateTableRows } from './generate-table.js'
 import { generateDeferredUpdates } from './deferred-updates.js'
+import { resolveCardinalityForTable } from './cardinality.js'
 import type { DependencyEdge } from '../graph/types.js'
 import { generationFailure } from '../errors/index.js'
 
@@ -137,6 +138,24 @@ export async function generate(
       // b. Map columns
       const mapping = mapTable(table)
 
+      // b2. Resolve cardinality configs for this table (if any)
+      const deferredFKColumns = deferredColumnMap.get(tableName) ?? new Set()
+      let fkAssignments: Map<string, unknown[][]> | undefined
+      const cardinalityConfig = genConfig.tableCardinalityConfigs?.get(tableName)
+      if (cardinalityConfig && cardinalityConfig.size > 0) {
+        const rowCount = getRowCount(genConfig, tableName)
+        if (rowCount > 0) {
+          fkAssignments = resolveCardinalityForTable(
+            table,
+            referencePool,
+            cardinalityConfig,
+            rowCount,
+            faker,
+            deferredFKColumns,
+          )
+        }
+      }
+
       // c. Generate rows
       const tableResult = generateTableRows({
         table,
@@ -146,7 +165,8 @@ export async function generate(
         referencePool,
         uniqueTracker,
         existingData,
-        deferredFKColumns: deferredColumnMap.get(tableName) ?? new Set(),
+        deferredFKColumns,
+        fkAssignments,
       })
 
       // d. Update reference pool with newly generated PKs

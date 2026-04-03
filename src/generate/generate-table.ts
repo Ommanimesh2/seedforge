@@ -26,6 +26,8 @@ export interface TableGenerationContext {
   existingData: ExistingData
   /** FK columns that should be NULL (self-ref or cycle-broken) */
   deferredFKColumns: Set<string>
+  /** Pre-computed FK assignment sequences for cardinality-configured columns */
+  fkAssignments?: Map<string, unknown[][]>
 }
 
 /**
@@ -137,7 +139,11 @@ export function generateTableRows(
         }
         handledFKs.add(fkInfo.fkName)
 
-        const refTuple = referencePool.pickReference(fkInfo.refTable, faker)
+        // Use pre-computed cardinality assignment if available, otherwise uniform
+        const preAssigned = context.fkAssignments?.get(fkInfo.fkColumns[0])
+        const refTuple = preAssigned && i < preAssigned.length
+          ? preAssigned[i]
+          : referencePool.pickReference(fkInfo.refTable, faker)
 
         if (refTuple === null) {
           // Pool is empty

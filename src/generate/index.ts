@@ -46,6 +46,19 @@ export type {
   StreamTableGenerationMeta,
 } from './stream-generate.js'
 
+// Cardinality
+export {
+  distributeChildren,
+  buildFKAssignmentSequence,
+  resolveCardinalityForTable,
+  convertRelationshipConfig,
+  buildCardinalityFromConfig,
+  parseCardinalityRange,
+  type CardinalitySpec,
+  type CardinalityDistribution,
+  type TableCardinalityConfig,
+} from './cardinality.js'
+
 // Types
 export type {
   GenerationConfig,

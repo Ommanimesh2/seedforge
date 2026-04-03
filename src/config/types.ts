@@ -13,9 +13,20 @@ export interface ColumnOverride {
   distribution?: string
 }
 
+export interface RelationshipConfig {
+  /** Cardinality range ("1..10") or discrete values ([1, 3, 5]) */
+  cardinality: string | number[]
+  /** Distribution for range-based cardinality (default: 'uniform') */
+  distribution?: 'uniform' | 'zipf' | 'normal'
+  /** Weights for discrete cardinality values (parallel to cardinality array) */
+  weights?: number[]
+}
+
 export interface TableConfig {
   count?: number
   columns?: Record<string, ColumnOverride>
+  /** FK column relationship cardinality configurations */
+  relationships?: Record<string, RelationshipConfig>
 }
 
 export interface VirtualForeignKey {

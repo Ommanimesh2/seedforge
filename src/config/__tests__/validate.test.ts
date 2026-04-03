@@ -310,4 +310,155 @@ describe('validateConfig', () => {
       }
     })
   })
+
+  describe('relationships config', () => {
+    it('valid range cardinality parses correctly', () => {
+      const result = validateConfig({
+        tables: {
+          orders: {
+            relationships: {
+              user_id: { cardinality: '1..10' },
+            },
+          },
+        },
+      })
+      expect(result.tables.orders.relationships).toBeDefined()
+      expect(result.tables.orders.relationships!.user_id.cardinality).toBe('1..10')
+    })
+
+    it('valid range with distribution parses correctly', () => {
+      const result = validateConfig({
+        tables: {
+          orders: {
+            relationships: {
+              user_id: { cardinality: '1..10', distribution: 'zipf' },
+            },
+          },
+        },
+      })
+      expect(result.tables.orders.relationships!.user_id.distribution).toBe('zipf')
+    })
+
+    it('valid discrete cardinality with weights', () => {
+      const result = validateConfig({
+        tables: {
+          orders: {
+            relationships: {
+              user_id: { cardinality: [1, 3, 5], weights: [0.6, 0.3, 0.1] },
+            },
+          },
+        },
+      })
+      expect(result.tables.orders.relationships!.user_id.cardinality).toEqual([1, 3, 5])
+      expect(result.tables.orders.relationships!.user_id.weights).toEqual([0.6, 0.3, 0.1])
+    })
+
+    it('missing cardinality throws SF5021', () => {
+      try {
+        validateConfig({
+          tables: {
+            orders: {
+              relationships: {
+                user_id: {} as Record<string, unknown>,
+              },
+            },
+          },
+        })
+        expect.fail('Should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(ConfigError)
+        expect((err as ConfigError).code).toBe('SF5021')
+      }
+    })
+
+    it('invalid range format throws SF5022', () => {
+      try {
+        validateConfig({
+          tables: {
+            orders: {
+              relationships: {
+                user_id: { cardinality: 'abc' },
+              },
+            },
+          },
+        })
+        expect.fail('Should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(ConfigError)
+        expect((err as ConfigError).code).toBe('SF5022')
+      }
+    })
+
+    it('reversed range throws SF5022', () => {
+      try {
+        validateConfig({
+          tables: {
+            orders: {
+              relationships: {
+                user_id: { cardinality: '10..1' },
+              },
+            },
+          },
+        })
+        expect.fail('Should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(ConfigError)
+        expect((err as ConfigError).code).toBe('SF5022')
+      }
+    })
+
+    it('invalid distribution throws SF5024', () => {
+      try {
+        validateConfig({
+          tables: {
+            orders: {
+              relationships: {
+                user_id: { cardinality: '1..10', distribution: 'fibonacci' },
+              },
+            },
+          },
+        })
+        expect.fail('Should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(ConfigError)
+        expect((err as ConfigError).code).toBe('SF5024')
+      }
+    })
+
+    it('weights without array cardinality throws SF5025', () => {
+      try {
+        validateConfig({
+          tables: {
+            orders: {
+              relationships: {
+                user_id: { cardinality: '1..10', weights: [0.5, 0.5] },
+              },
+            },
+          },
+        })
+        expect.fail('Should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(ConfigError)
+        expect((err as ConfigError).code).toBe('SF5025')
+      }
+    })
+
+    it('weights length mismatch throws SF5025', () => {
+      try {
+        validateConfig({
+          tables: {
+            orders: {
+              relationships: {
+                user_id: { cardinality: [1, 3, 5], weights: [0.5, 0.5] },
+              },
+            },
+          },
+        })
+        expect.fail('Should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(ConfigError)
+        expect((err as ConfigError).code).toBe('SF5025')
+      }
+    })
+  })
 })

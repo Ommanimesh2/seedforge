@@ -29,6 +29,9 @@ export function createGenerationConfig(
     if (overrides.seed !== undefined) {
       config.seed = overrides.seed
     }
+    if (overrides.tableCardinalityConfigs !== undefined) {
+      config.tableCardinalityConfigs = new Map(overrides.tableCardinalityConfigs)
+    }
   }
 
   return config
@@ -45,9 +48,10 @@ export function getRowCount(
   const perTable = config.tableRowCounts.get(tableName)
   const count = perTable !== undefined ? perTable : config.globalRowCount
 
-  if (!Number.isInteger(count) || count < 1) {
+  if (!Number.isInteger(count) || count < 0) {
     return 1
   }
 
+  // Allow 0: generates no rows but still queries existing data for reference pools
   return count
 }

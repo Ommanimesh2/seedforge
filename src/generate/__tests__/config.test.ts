@@ -62,11 +62,11 @@ describe('getRowCount', () => {
     expect(getRowCount(config, 'public.users')).toBe(75)
   })
 
-  it('returns 1 for invalid row count (zero)', () => {
+  it('returns 0 for zero row count (used by seeder for reference-only tables)', () => {
     const config = createGenerationConfig({
       tableRowCounts: new Map([['public.users', 0]]),
     })
-    expect(getRowCount(config, 'public.users')).toBe(1)
+    expect(getRowCount(config, 'public.users')).toBe(0)
   })
 
   it('returns 1 for negative row count', () => {

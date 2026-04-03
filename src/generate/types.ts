@@ -14,6 +14,12 @@ export interface GenerationConfig {
   nullableRate: number
   /** Seed for deterministic generation (passed to createSeededFaker) */
   seed?: number
+  /**
+   * Per-table FK cardinality configuration.
+   * Key1: qualified table name (e.g., "public.orders")
+   * Key2: FK column name (e.g., "user_id")
+   */
+  tableCardinalityConfigs?: Map<string, import('./cardinality.js').TableCardinalityConfig>
 }
 
 /**

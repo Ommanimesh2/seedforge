@@ -4,6 +4,7 @@ import type {
   SeedforgeConfig,
   ColumnOverride,
   TableConfig,
+  RelationshipConfig,
   VirtualForeignKey,
   ConnectionConfig,
   ScenarioDef,
@@ -25,7 +26,9 @@ const VALID_TOP_LEVEL_KEYS = [
 ]
 
 const VALID_CONNECTION_KEYS = ['url', 'schema']
-const VALID_TABLE_CONFIG_KEYS = ['count', 'columns']
+const VALID_TABLE_CONFIG_KEYS = ['count', 'columns', 'relationships']
+const VALID_RELATIONSHIP_KEYS = ['cardinality', 'distribution', 'weights']
+const VALID_CARDINALITY_DISTRIBUTIONS = ['uniform', 'zipf', 'normal']
 const VALID_COLUMN_OVERRIDE_KEYS = [
   'generator',
   'unique',
@@ -239,6 +242,138 @@ function validateColumnOverride(
   return override
 }
 
+function validateRelationshipConfig(
+  raw: unknown,
+  tableName: string,
+  columnName: string,
+): RelationshipConfig {
+  if (!isPlainObject(raw)) {
+    throw new ConfigError(
+      'SF5021',
+      `Relationship config for ${tableName}.${columnName} must be an object`,
+      [],
+    )
+  }
+
+  checkUnknownKeys(raw, VALID_RELATIONSHIP_KEYS, `tables.${tableName}.relationships.${columnName}.`)
+
+  if (raw.cardinality === undefined) {
+    throw new ConfigError(
+      'SF5021',
+      `"cardinality" is required in relationships config for ${tableName}.${columnName}`,
+      ['Provide a range string like "1..10" or an array like [1, 3, 5]'],
+      { table: tableName, column: columnName },
+    )
+  }
+
+  const config: RelationshipConfig = { cardinality: '' }
+
+  if (typeof raw.cardinality === 'string') {
+    const match = /^(\d+)\.\.(\d+)$/.exec(raw.cardinality)
+    if (!match) {
+      throw new ConfigError(
+        'SF5022',
+        `Invalid cardinality range "${raw.cardinality}" for ${tableName}.${columnName}. Use format "min..max" (e.g., "1..10")`,
+        ['Examples: "1..10", "0..3", "2..5"'],
+        { table: tableName, column: columnName, value: raw.cardinality },
+      )
+    }
+    const min = parseInt(match[1], 10)
+    const max = parseInt(match[2], 10)
+    if (min > max) {
+      throw new ConfigError(
+        'SF5022',
+        `Cardinality min (${min}) must be <= max (${max}) for ${tableName}.${columnName}`,
+        [],
+        { table: tableName, column: columnName },
+      )
+    }
+    config.cardinality = raw.cardinality
+  } else if (Array.isArray(raw.cardinality)) {
+    for (const v of raw.cardinality) {
+      if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+        throw new ConfigError(
+          'SF5023',
+          `Discrete cardinality values must be non-negative integers for ${tableName}.${columnName}`,
+          ['Example: [1, 3, 5]'],
+          { table: tableName, column: columnName },
+        )
+      }
+    }
+    if (raw.cardinality.length === 0) {
+      throw new ConfigError(
+        'SF5023',
+        `Cardinality array must not be empty for ${tableName}.${columnName}`,
+        [],
+        { table: tableName, column: columnName },
+      )
+    }
+    config.cardinality = raw.cardinality as number[]
+  } else {
+    throw new ConfigError(
+      'SF5022',
+      `"cardinality" must be a range string or array for ${tableName}.${columnName}, got ${typeof raw.cardinality}`,
+      ['Use a range string like "1..10" or an array like [1, 3, 5]'],
+      { table: tableName, column: columnName },
+    )
+  }
+
+  if (raw.distribution !== undefined) {
+    if (
+      typeof raw.distribution !== 'string' ||
+      !VALID_CARDINALITY_DISTRIBUTIONS.includes(raw.distribution)
+    ) {
+      throw new ConfigError(
+        'SF5024',
+        `Invalid distribution "${raw.distribution}" for relationship ${tableName}.${columnName}. Must be one of: ${VALID_CARDINALITY_DISTRIBUTIONS.join(', ')}`,
+        [],
+        { table: tableName, column: columnName, distribution: raw.distribution },
+      )
+    }
+    config.distribution = raw.distribution as 'uniform' | 'zipf' | 'normal'
+  }
+
+  if (raw.weights !== undefined) {
+    if (!Array.isArray(raw.cardinality)) {
+      throw new ConfigError(
+        'SF5025',
+        `"weights" can only be used with array cardinality for ${tableName}.${columnName}`,
+        ['Remove "weights" or change "cardinality" to an array'],
+        { table: tableName, column: columnName },
+      )
+    }
+    if (!Array.isArray(raw.weights)) {
+      throw new ConfigError(
+        'SF5025',
+        `"weights" must be an array of numbers for ${tableName}.${columnName}`,
+        [],
+        { table: tableName, column: columnName },
+      )
+    }
+    if ((raw.weights as unknown[]).length !== (raw.cardinality as unknown[]).length) {
+      throw new ConfigError(
+        'SF5025',
+        `"weights" length (${(raw.weights as unknown[]).length}) must match "cardinality" length (${(raw.cardinality as unknown[]).length}) for ${tableName}.${columnName}`,
+        [],
+        { table: tableName, column: columnName },
+      )
+    }
+    for (const w of raw.weights as unknown[]) {
+      if (typeof w !== 'number' || w < 0) {
+        throw new ConfigError(
+          'SF5025',
+          `"weights" must contain non-negative numbers for ${tableName}.${columnName}`,
+          [],
+          { table: tableName, column: columnName },
+        )
+      }
+    }
+    config.weights = raw.weights as number[]
+  }
+
+  return config
+}
+
 function validateTableConfig(
   raw: unknown,
   tableName: string,
@@ -284,6 +419,25 @@ function validateTableConfig(
     for (const [colName, colRaw] of Object.entries(raw.columns)) {
       config.columns[colName] = validateColumnOverride(
         colRaw,
+        tableName,
+        colName,
+      )
+    }
+  }
+
+  if (raw.relationships !== undefined) {
+    if (!isPlainObject(raw.relationships)) {
+      throw new ConfigError(
+        'SF5003',
+        `"relationships" in table "${tableName}" must be an object`,
+        [],
+      )
+    }
+
+    config.relationships = {}
+    for (const [colName, relRaw] of Object.entries(raw.relationships)) {
+      config.relationships[colName] = validateRelationshipConfig(
+        relRaw,
         tableName,
         colName,
       )

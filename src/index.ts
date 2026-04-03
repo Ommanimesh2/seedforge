@@ -1,3 +1,10 @@
+// Programmatic API (primary public surface)
+export * from './api/index.js'
+
+// Core pipeline
+export * from './core/index.js'
+
+// Internals (for advanced usage)
 export * from './types/index.js'
 export * from './errors/index.js'
 export * from './introspect/index.js'

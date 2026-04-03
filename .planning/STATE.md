@@ -1,8 +1,8 @@
 # seedforge — Project State
 
-## Status: v0.1.0 COMPLETE
+## Status: v2.1.0 COMPLETE
 
-## Phase Status
+## v1 Phase Status (complete)
 | Phase | Status | Tests |
 |-------|--------|-------|
 | 1. Scaffolding & Core Types | DONE | 32 |
@@ -14,22 +14,56 @@
 | 7. Configuration System | DONE | 103 |
 | 8. CLI Polish & Release | DONE | — |
 
-## Final Stats
-- **Total tests:** 577
-- **Test files:** 51
+## v1.x Phase Status (complete)
+| Phase | Status |
+|-------|--------|
+| 1. Stem Scorer | DONE |
+| 2. MySQL Support | DONE |
+| 3. SQLite Support | DONE |
+| 4. Prisma Parser | DONE |
+| 5. Drizzle Parser | DONE |
+| 6. TypeORM Parser | DONE |
+| 7. JPA Parser | DONE |
+| 8. Plugin System | DONE |
+| 9. Scale & Performance | DONE |
+| 10. Advanced Generation | DONE |
+
+## Current Stats
+- **Version:** 2.1.0
+- **Total tests:** 1249
+- **Test files:** 77
 - **Build:** clean
 - **Lint:** clean
 
-## Next: v2 Roadmap (10 phases)
-1. Semantic column matching (stem scorer, zero deps)
-2. MySQL support
-3. SQLite support
-4. Prisma schema parsing
-5. Drizzle schema parsing
-6. TypeORM entity parsing
-7. JPA/Hibernate entity parsing
-8. Plugin system (community parsers)
-9. Scale & performance (COPY, 100K+ rows)
-10. Advanced generation (distributions, scenarios, cross-column coherence)
+## v2.0.0 Phase Status
+| Phase | Status |
+|-------|--------|
+| 1. Core Pipeline Extraction | DONE |
+| 2. seed() One-Liner API | DONE |
+| 3. Seeder Class | DONE |
+| 4. Fluent Builder | DONE |
+| 5. Test Helpers + Exports | DONE |
+| 6. CLI Refactor + Version Bump | DONE |
 
-See `.planning/v2/ROADMAP.md` for details.
+## v2.1.0 Phase Status
+| Phase | Status |
+|-------|--------|
+| 1. Cardinality resolver (cardinality.ts) | DONE |
+| 2. GenerationConfig integration | DONE |
+| 3. Config types + validation | DONE |
+| 4. Generation engine wiring | DONE |
+| 5. Programmatic API | DONE |
+| 6. CLI + pipeline wiring | DONE |
+| 7. Tests (38 new) | DONE |
+
+## Next: v2.x Releases
+| Release | Theme | Status |
+|---------|-------|--------|
+| v2.0.0 | Programmatic TypeScript API | DONE |
+| v2.1.0 | Weighted Relationship Cardinality | DONE |
+| v2.2.0 | LLM-Enhanced Text Generation | PLANNED |
+| v2.3.0 | GitHub Action + CI/CD | PLANNED |
+| v2.4.0 | Production Data Subset + Anonymize | PLANNED |
+
+See `.planning/v2/RELEASES.md` for overview.
+See `.planning/v2/v2.x.x-*.md` for detailed plans.
