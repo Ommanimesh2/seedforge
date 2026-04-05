@@ -20,6 +20,12 @@ export interface GenerationConfig {
    * Key2: FK column name (e.g., "user_id")
    */
   tableCardinalityConfigs?: Map<string, import('./cardinality.js').TableCardinalityConfig>
+  /**
+   * Pre-generated AI text pool.
+   * Key: "schema.table.column" or "table.column"
+   * Value: array of text values to pull from instead of Faker
+   */
+  aiTextPool?: Map<string, string[]>
 }
 
 /**

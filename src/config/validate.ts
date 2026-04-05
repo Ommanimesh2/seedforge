@@ -8,6 +8,7 @@ import type {
   VirtualForeignKey,
   ConnectionConfig,
   ScenarioDef,
+  AIConfigYaml,
 } from './types.js'
 import { createDefaultConfig } from './defaults.js'
 import { suggestKey } from './levenshtein.js'
@@ -23,7 +24,24 @@ const VALID_TOP_LEVEL_KEYS = [
   'exclude',
   'virtualForeignKeys',
   'scenarios',
+  'ai',
 ]
+
+const VALID_AI_KEYS = [
+  'enabled',
+  'provider',
+  'model',
+  'baseUrl',
+  'apiKey',
+  'columns',
+  'temperature',
+  'maxTokensPerField',
+  'batchSize',
+  'cache',
+  'prompt',
+]
+
+const VALID_AI_PROVIDERS = ['openai', 'anthropic', 'ollama', 'groq']
 
 const VALID_CONNECTION_KEYS = ['url', 'schema']
 const VALID_TABLE_CONFIG_KEYS = ['count', 'columns', 'relationships']
@@ -639,6 +657,121 @@ export function validateConfig(
   // scenarios
   if (raw.scenarios !== undefined) {
     config.scenarios = validateScenariosSection(raw.scenarios)
+  }
+
+  // ai
+  if (raw.ai !== undefined) {
+    config.ai = validateAIConfig(raw.ai)
+  }
+
+  return config
+}
+
+/**
+ * Validates the AI configuration section.
+ */
+function validateAIConfig(raw: unknown): AIConfigYaml {
+  if (!isPlainObject(raw)) {
+    throw new ConfigError(
+      'SF5030',
+      '"ai" must be an object',
+      ['Example: ai: { enabled: true, provider: "ollama" }'],
+    )
+  }
+
+  checkUnknownKeys(raw, VALID_AI_KEYS, 'ai.')
+
+  const config: AIConfigYaml = {}
+
+  if (raw.enabled !== undefined) {
+    if (typeof raw.enabled !== 'boolean') {
+      throw new ConfigError('SF5030', '"ai.enabled" must be a boolean', [])
+    }
+    config.enabled = raw.enabled
+  }
+
+  if (raw.provider !== undefined) {
+    if (typeof raw.provider !== 'string' || !VALID_AI_PROVIDERS.includes(raw.provider)) {
+      throw new ConfigError(
+        'SF5031',
+        `Invalid AI provider "${raw.provider}". Must be one of: ${VALID_AI_PROVIDERS.join(', ')}`,
+        ['Use "ollama" for local inference with no API key'],
+        { provider: raw.provider },
+      )
+    }
+    config.provider = raw.provider as AIConfigYaml['provider']
+  }
+
+  if (raw.model !== undefined) {
+    if (typeof raw.model !== 'string' || raw.model.length === 0) {
+      throw new ConfigError('SF5030', '"ai.model" must be a non-empty string', [])
+    }
+    config.model = raw.model
+  }
+
+  if (raw.baseUrl !== undefined) {
+    if (typeof raw.baseUrl !== 'string' || raw.baseUrl.length === 0) {
+      throw new ConfigError('SF5030', '"ai.baseUrl" must be a non-empty string', [])
+    }
+    config.baseUrl = raw.baseUrl
+  }
+
+  if (raw.apiKey !== undefined) {
+    if (typeof raw.apiKey !== 'string') {
+      throw new ConfigError('SF5030', '"ai.apiKey" must be a string', [])
+    }
+    config.apiKey = raw.apiKey
+  }
+
+  if (raw.columns !== undefined) {
+    if (!Array.isArray(raw.columns) || !raw.columns.every((c: unknown) => typeof c === 'string')) {
+      throw new ConfigError(
+        'SF5030',
+        '"ai.columns" must be an array of strings',
+        ['Example: ["products.description", "users.bio"]'],
+      )
+    }
+    config.columns = raw.columns as string[]
+  }
+
+  if (raw.temperature !== undefined) {
+    if (typeof raw.temperature !== 'number' || raw.temperature < 0 || raw.temperature > 2) {
+      throw new ConfigError(
+        'SF5032',
+        `"ai.temperature" must be a number between 0 and 2, got ${raw.temperature}`,
+        ['Lower values (0.1-0.5) produce more focused text, higher values (0.7-1.2) produce more creative text'],
+        { value: raw.temperature },
+      )
+    }
+    config.temperature = raw.temperature
+  }
+
+  if (raw.maxTokensPerField !== undefined) {
+    if (typeof raw.maxTokensPerField !== 'number' || !Number.isInteger(raw.maxTokensPerField) || raw.maxTokensPerField < 1) {
+      throw new ConfigError('SF5030', '"ai.maxTokensPerField" must be a positive integer', [])
+    }
+    config.maxTokensPerField = raw.maxTokensPerField
+  }
+
+  if (raw.batchSize !== undefined) {
+    if (typeof raw.batchSize !== 'number' || !Number.isInteger(raw.batchSize) || raw.batchSize < 1) {
+      throw new ConfigError('SF5030', '"ai.batchSize" must be a positive integer', [])
+    }
+    config.batchSize = raw.batchSize
+  }
+
+  if (raw.cache !== undefined) {
+    if (typeof raw.cache !== 'boolean') {
+      throw new ConfigError('SF5030', '"ai.cache" must be a boolean', [])
+    }
+    config.cache = raw.cache
+  }
+
+  if (raw.prompt !== undefined) {
+    if (typeof raw.prompt !== 'string') {
+      throw new ConfigError('SF5030', '"ai.prompt" must be a string', [])
+    }
+    config.prompt = raw.prompt
   }
 
   return config

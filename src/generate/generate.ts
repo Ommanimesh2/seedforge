@@ -167,6 +167,7 @@ export async function generate(
         existingData,
         deferredFKColumns,
         fkAssignments,
+        aiTextPool: genConfig.aiTextPool,
       })
 
       // d. Update reference pool with newly generated PKs

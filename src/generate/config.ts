@@ -32,6 +32,9 @@ export function createGenerationConfig(
     if (overrides.tableCardinalityConfigs !== undefined) {
       config.tableCardinalityConfigs = new Map(overrides.tableCardinalityConfigs)
     }
+    if (overrides.aiTextPool !== undefined) {
+      config.aiTextPool = overrides.aiTextPool
+    }
   }
 
   return config

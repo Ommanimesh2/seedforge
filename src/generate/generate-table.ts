@@ -28,6 +28,8 @@ export interface TableGenerationContext {
   deferredFKColumns: Set<string>
   /** Pre-computed FK assignment sequences for cardinality-configured columns */
   fkAssignments?: Map<string, unknown[][]>
+  /** Pre-generated AI text pool. Key: "table.column", Value: text values */
+  aiTextPool?: Map<string, string[]>
 }
 
 /**
@@ -209,6 +211,20 @@ export function generateTableRows(
         // No generator available (auto-increment or generated column mapping returned null)
         row[columnName] = null
         continue
+      }
+
+      // e2. Check AI text pool — pull pre-generated LLM text if available
+      if (context.aiTextPool) {
+        const poolKey = `${qualifiedName}.${columnName}`
+        const aiValues = context.aiTextPool.get(poolKey)
+        if (aiValues && aiValues.length > 0) {
+          let aiValue: string = aiValues[i % aiValues.length]
+          if (column.maxLength && aiValue.length > column.maxLength) {
+            aiValue = aiValue.substring(0, column.maxLength).trimEnd()
+          }
+          row[columnName] = aiValue
+          continue
+        }
       }
 
       // f. Handle unique columns

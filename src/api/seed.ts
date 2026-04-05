@@ -57,6 +57,7 @@ export async function seed(
     drizzle,
     jpa,
     typeorm,
+    ai,
   } = opts
 
   let dbSchema: DatabaseSchema
@@ -138,6 +139,7 @@ export async function seed(
       fast,
       batchSize,
       quiet,
+      ai,
     })
 
     // Build result

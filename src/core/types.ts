@@ -31,6 +31,8 @@ export interface PipelineOptions {
   version?: string
   /** Per-table FK cardinality configurations */
   tableCardinalityConfigs?: Map<string, import('../generate/cardinality.js').TableCardinalityConfig>
+  /** AI text generation config (opt-in) */
+  ai?: import('../ai/types.js').AIConfig
 }
 
 /**

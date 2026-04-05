@@ -44,6 +44,10 @@ export interface CliOptions {
   json: boolean
   yes: boolean
   fast: boolean
+  ai: boolean
+  aiProvider?: string
+  aiModel?: string
+  aiColumns?: string[]
 }
 
 // ─── Shared helpers ──────────────────────────────────────────────────
@@ -91,6 +95,7 @@ async function generateAndOutput(
   effectiveCount: number,
   effectiveSeed: number | undefined,
   tableCardinalityConfigs?: Map<string, import('./generate/cardinality.js').TableCardinalityConfig>,
+  aiConfig?: import('./ai/types.js').AIConfig,
 ): Promise<void> {
   const plan = buildInsertPlan(schema)
 
@@ -104,12 +109,27 @@ async function generateAndOutput(
     }
   }
 
+  // Pre-generate AI text pool if AI is enabled
+  let aiTextPool: Map<string, string[]> | undefined
+  if (aiConfig?.enabled) {
+    const { generateAITextPool } = await import('./ai/batch.js')
+    const tableCounts = new Map<string, number>()
+    for (const tableName of plan.ordered) {
+      tableCounts.set(tableName, effectiveCount)
+    }
+    aiTextPool = await generateAITextPool(schema, aiConfig, tableCounts, undefined, {
+      quiet: options.quiet,
+      skipConfirmation: options.yes,
+    })
+  }
+
   const mode = resolveOutputMode(options)
   const generationClient = mode === OutputMode.DRY_RUN ? null : client
   const generationResult = await generate(schema, plan, generationClient, {
     globalRowCount: effectiveCount,
     seed: effectiveSeed,
     tableCardinalityConfigs,
+    aiTextPool,
   })
 
   if (!options.quiet) {
@@ -158,6 +178,7 @@ async function handleParserPath(
   effectiveCount: number,
   effectiveSeed: number | undefined,
   tableCardinalityConfigs?: Map<string, import('./generate/cardinality.js').TableCardinalityConfig>,
+  aiConfig?: import('./ai/types.js').AIConfig,
 ): Promise<void> {
   let client: Client | null = null
 
@@ -170,7 +191,7 @@ async function handleParserPath(
   }
 
   try {
-    await generateAndOutput(schema, client, options, effectiveCount, effectiveSeed, tableCardinalityConfigs)
+    await generateAndOutput(schema, client, options, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
   } finally {
     if (client) {
       await disconnect(client)
@@ -206,6 +227,10 @@ export function createProgram(): Command {
     .option('--json', 'machine-readable JSON output', false)
     .option('--yes', 'skip confirmation prompts', false)
     .option('--fast', 'use COPY-based insertion for PostgreSQL (faster for large datasets)', false)
+    .option('--ai', 'enable AI-enhanced text generation for text columns', false)
+    .option('--ai-provider <provider>', 'AI provider: openai, anthropic, ollama, groq')
+    .option('--ai-model <model>', 'AI model name (provider-specific)')
+    .option('--ai-columns <columns...>', 'columns for AI text: table.column or column')
     .addHelpText('after', `
 Examples:
   $ seedforge --db postgres://localhost/mydb
@@ -267,6 +292,23 @@ Examples:
         ? buildCardinalityFromConfig(mergedConfig.tables, effectiveSchema)
         : undefined
 
+      // Build AI config from CLI flags + config file
+      const aiConfig = (options.ai || mergedConfig.ai?.enabled)
+        ? {
+            enabled: true,
+            provider: (options.aiProvider ?? mergedConfig.ai?.provider) as import('./ai/types.js').AIProviderType | undefined,
+            model: options.aiModel ?? mergedConfig.ai?.model,
+            baseUrl: mergedConfig.ai?.baseUrl,
+            apiKey: mergedConfig.ai?.apiKey,
+            columns: options.aiColumns ?? mergedConfig.ai?.columns,
+            temperature: mergedConfig.ai?.temperature,
+            maxTokensPerField: mergedConfig.ai?.maxTokensPerField,
+            batchSize: mergedConfig.ai?.batchSize,
+            cache: mergedConfig.ai?.cache,
+            prompt: mergedConfig.ai?.prompt,
+          }
+        : undefined
+
       // Determine connection URL
       const connectionUrl = mergedConfig.connection.url ?? options.db
 
@@ -306,7 +348,7 @@ Examples:
 
           const schema = await detectedParser.parse(process.cwd())
           logSchemaStats(schema, 'Parsed', options)
-          await generateAndOutput(schema, null, options, effectiveCount, effectiveSeed, tableCardinalityConfigs)
+          await generateAndOutput(schema, null, options, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
           return
         }
       }
@@ -328,7 +370,7 @@ Examples:
 
         const schema = parsePrismaFile(prismaPath)
         logSchemaStats(schema, 'Parsed', options)
-        await handleParserPath(schema, connectionUrl, options, effectiveSchema, effectiveCount, effectiveSeed, tableCardinalityConfigs)
+        await handleParserPath(schema, connectionUrl, options, effectiveSchema, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
         return
       }
 
@@ -345,7 +387,7 @@ Examples:
 
         const schema = parseDrizzleFile(options.drizzle, effectiveSchema)
         logSchemaStats(schema, 'Parsed', options)
-        await handleParserPath(schema, connectionUrl, options, effectiveSchema, effectiveCount, effectiveSeed, tableCardinalityConfigs)
+        await handleParserPath(schema, connectionUrl, options, effectiveSchema, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
         return
       }
 
@@ -362,7 +404,7 @@ Examples:
 
         const schema = parseJpaDirectory(options.jpa, { schemaName: effectiveSchema })
         logSchemaStats(schema, 'Parsed', options)
-        await handleParserPath(schema, connectionUrl, options, effectiveSchema, effectiveCount, effectiveSeed, tableCardinalityConfigs)
+        await handleParserPath(schema, connectionUrl, options, effectiveSchema, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
         return
       }
 
@@ -379,7 +421,7 @@ Examples:
 
         const schema = parseTypeORMDirectory(options.typeorm)
         logSchemaStats(schema, 'Parsed', options)
-        await handleParserPath(schema, connectionUrl, options, effectiveSchema, effectiveCount, effectiveSeed, tableCardinalityConfigs)
+        await handleParserPath(schema, connectionUrl, options, effectiveSchema, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
         return
       }
 
@@ -433,12 +475,12 @@ Examples:
       }
 
       if (dbType === DatabaseType.SQLITE) {
-        await handleSqlitePath(connectionUrl, options, effectiveCount, effectiveSeed, tableCardinalityConfigs)
+        await handleSqlitePath(connectionUrl, options, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
       } else if (dbType === DatabaseType.MYSQL) {
-        await handleMysqlPath(connectionUrl, options, effectiveSchema, effectiveCount, effectiveSeed, tableCardinalityConfigs)
+        await handleMysqlPath(connectionUrl, options, effectiveSchema, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
       } else {
         // PostgreSQL path
-        await handlePostgresPath(connectionUrl, options, effectiveSchema, effectiveCount, effectiveSeed, tableCardinalityConfigs)
+        await handlePostgresPath(connectionUrl, options, effectiveSchema, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
       }
     })
 
@@ -453,6 +495,7 @@ async function handleSqlitePath(
   effectiveCount: number,
   effectiveSeed: number | undefined,
   tableCardinalityConfigs?: Map<string, import('./generate/cardinality.js').TableCardinalityConfig>,
+  aiConfig?: import('./ai/types.js').AIConfig,
 ): Promise<void> {
   const { connectSqlite, disconnectSqlite, extractSqlitePath } = await import('./introspect/sqlite/connection.js')
   const { introspectSqlite } = await import('./introspect/sqlite/introspect.js')
@@ -476,11 +519,26 @@ async function handleSqlitePath(
       }
     }
 
+    // Pre-generate AI text pool if AI is enabled
+    let aiTextPool: Map<string, string[]> | undefined
+    if (aiConfig?.enabled) {
+      const { generateAITextPool } = await import('./ai/batch.js')
+      const tableCounts = new Map<string, number>()
+      for (const tableName of plan.ordered) {
+        tableCounts.set(tableName, effectiveCount)
+      }
+      aiTextPool = await generateAITextPool(schema, aiConfig, tableCounts, undefined, {
+        quiet: options.quiet,
+        skipConfirmation: options.yes,
+      })
+    }
+
     const mode = resolveOutputMode(options)
     const generationResult = await generate(schema, plan, null, {
       globalRowCount: effectiveCount,
       seed: effectiveSeed,
       tableCardinalityConfigs,
+      aiTextPool,
     })
 
     if (!options.quiet) {
@@ -549,6 +607,7 @@ async function handleMysqlPath(
   effectiveCount: number,
   effectiveSeed: number | undefined,
   tableCardinalityConfigs?: Map<string, import('./generate/cardinality.js').TableCardinalityConfig>,
+  aiConfig?: import('./ai/types.js').AIConfig,
 ): Promise<void> {
   const adapter = await createAdapter(DatabaseType.MYSQL)
   const connection = await adapter.connect({
@@ -574,11 +633,26 @@ async function handleMysqlPath(
       }
     }
 
+    // Pre-generate AI text pool if AI is enabled
+    let aiTextPool: Map<string, string[]> | undefined
+    if (aiConfig?.enabled) {
+      const { generateAITextPool } = await import('./ai/batch.js')
+      const tableCounts = new Map<string, number>()
+      for (const tableName of plan.ordered) {
+        tableCounts.set(tableName, effectiveCount)
+      }
+      aiTextPool = await generateAITextPool(schema, aiConfig, tableCounts, undefined, {
+        quiet: options.quiet,
+        skipConfirmation: options.yes,
+      })
+    }
+
     const mode = resolveOutputMode(options)
     const generationResult = await generate(schema, plan, null, {
       globalRowCount: effectiveCount,
       seed: effectiveSeed,
       tableCardinalityConfigs,
+      aiTextPool,
     })
 
     if (!options.quiet) {
@@ -648,6 +722,7 @@ async function handlePostgresPath(
   effectiveCount: number,
   effectiveSeed: number | undefined,
   tableCardinalityConfigs?: Map<string, import('./generate/cardinality.js').TableCardinalityConfig>,
+  aiConfig?: import('./ai/types.js').AIConfig,
 ): Promise<void> {
   const client = await connect({
     connectionString: connectionUrl,
@@ -658,7 +733,7 @@ async function handlePostgresPath(
   try {
     const schema = await introspect(client, effectiveSchema)
     logSchemaStats(schema, 'Introspected', options)
-    await generateAndOutput(schema, client, options, effectiveCount, effectiveSeed, tableCardinalityConfigs)
+    await generateAndOutput(schema, client, options, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
   } finally {
     await disconnect(client)
   }

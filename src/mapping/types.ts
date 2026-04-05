@@ -17,6 +17,7 @@ export enum MappingSource {
   CHECK_CONSTRAINT = 'CHECK_CONSTRAINT',
   FOREIGN_KEY = 'FOREIGN_KEY',
   AUTO_INCREMENT = 'AUTO_INCREMENT',
+  AI_TEXT = 'AI_TEXT',
 }
 
 export type GeneratorFn = (faker: Faker, rowIndex: number) => unknown

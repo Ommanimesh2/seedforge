@@ -38,6 +38,9 @@ export interface SeedOptions {
   jpa?: string
   /** Path to TypeORM entity classes directory */
   typeorm?: string
+
+  /** AI text generation config (opt-in) */
+  ai?: import('../ai/types.js').AIConfig
 }
 
 /**

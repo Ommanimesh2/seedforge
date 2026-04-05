@@ -47,6 +47,20 @@ export interface ScenarioDef {
   tables: Record<string, ScenarioTableConfig>
 }
 
+export interface AIConfigYaml {
+  enabled?: boolean
+  provider?: 'openai' | 'anthropic' | 'ollama' | 'groq'
+  model?: string
+  baseUrl?: string
+  apiKey?: string
+  columns?: string[]
+  temperature?: number
+  maxTokensPerField?: number
+  batchSize?: number
+  cache?: boolean
+  prompt?: string
+}
+
 export interface SeedforgeConfig {
   connection: ConnectionConfig
   seed?: number
@@ -57,6 +71,7 @@ export interface SeedforgeConfig {
   exclude: string[]
   virtualForeignKeys: VirtualForeignKey[]
   scenarios?: Record<string, ScenarioDef>
+  ai?: AIConfigYaml
 }
 
 export interface CliOverrides {

@@ -38,10 +38,25 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
     ? connection.client
     : null
 
+  // Pre-generate AI text pool if AI is enabled
+  let aiTextPool: Map<string, string[]> | undefined
+  if (options.ai?.enabled) {
+    const { generateAITextPool } = await import('../ai/batch.js')
+    const tableCounts = new Map<string, number>()
+    for (const tableName of plan.ordered) {
+      tableCounts.set(tableName, count)
+    }
+    aiTextPool = await generateAITextPool(schema, options.ai, tableCounts, undefined, {
+      quiet,
+      skipConfirmation: true,
+    })
+  }
+
   const generationResult = await generate(schema, plan, genClient, {
     globalRowCount: count,
     seed,
     tableCardinalityConfigs: options.tableCardinalityConfigs,
+    aiTextPool,
   })
 
   // Dispatch to the appropriate executor
