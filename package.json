@@ -22,7 +22,16 @@
     "test:e2e": "vitest run --testTimeout 120000 src/__tests__/e2e/",
     "test:all": "vitest run --testTimeout 120000",
     "lint": "eslint src/",
-    "prepublishOnly": "npm run build"
+    "format": "prettier --write src/",
+    "format:check": "prettier --check src/",
+    "prepublishOnly": "npm run build",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "src/**/*.ts": [
+      "eslint --fix",
+      "prettier --write"
+    ]
   },
   "keywords": [
     "seed",
@@ -59,6 +68,9 @@
     "@types/pg-copy-streams": "^1.2.5",
     "@types/pg-format": "^1.0.5",
     "eslint": "^10.1.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
+    "prettier": "^3.8.2",
     "testcontainers": "^11.13.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",

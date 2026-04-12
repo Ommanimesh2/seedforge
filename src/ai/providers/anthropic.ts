@@ -1,6 +1,6 @@
 import type { AIProvider, AITextRequest } from '../types.js'
 import { buildPrompt } from '../prompt.js'
-import { parseJsonArray } from './openai.js'
+import { parseJsonArray, fetchWithRetry } from './openai.js'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const ANTHROPIC_VERSION = '2023-06-01'
@@ -15,12 +15,7 @@ export class AnthropicProvider implements AIProvider {
   private temperature: number
   private baseUrl: string
 
-  constructor(options: {
-    apiKey: string
-    model?: string
-    baseUrl?: string
-    temperature?: number
-  }) {
+  constructor(options: { apiKey: string; model?: string; baseUrl?: string; temperature?: number }) {
     this.apiKey = options.apiKey
     this.model = options.model ?? 'claude-haiku-4-5-20251001'
     this.baseUrl = (options.baseUrl ?? ANTHROPIC_API_URL).replace(/\/$/, '')
@@ -30,7 +25,7 @@ export class AnthropicProvider implements AIProvider {
   async generate(request: AITextRequest): Promise<string[]> {
     const prompt = buildPrompt(request)
 
-    const response = await fetch(this.baseUrl, {
+    const response = await fetchWithRetry(this.baseUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -41,21 +36,13 @@ export class AnthropicProvider implements AIProvider {
         model: this.model,
         max_tokens: request.maxTokens * request.count,
         temperature: this.temperature,
-        system: 'You are a test data generator. You produce realistic, varied text for database seed data.',
-        messages: [
-          { role: 'user', content: prompt },
-        ],
+        system:
+          'You are a test data generator. You produce realistic, varied text for database seed data.',
+        messages: [{ role: 'user', content: prompt }],
       }),
     })
 
-    if (!response.ok) {
-      const body = await response.text()
-      throw new Error(
-        `Anthropic API error (${response.status}): ${body.slice(0, 200)}`,
-      )
-    }
-
-    const data = await response.json() as {
+    const data = (await response.json()) as {
       content: Array<{ type: string; text: string }>
     }
 

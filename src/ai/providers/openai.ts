@@ -1,6 +1,68 @@
 import type { AIProvider, AITextRequest } from '../types.js'
 import { buildPrompt } from '../prompt.js'
 
+const FETCH_TIMEOUT_MS = 30_000
+const MAX_RETRIES = 3
+const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504])
+
+/**
+ * Fetch with timeout and retry for transient failures (429, 5xx).
+ * Uses exponential backoff with jitter.
+ */
+export async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  retries = MAX_RETRIES,
+  timeoutMs = FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  let lastError: Error | undefined
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(url, {
+        ...init,
+        signal: init.signal ?? AbortSignal.timeout(timeoutMs),
+      })
+
+      if (response.ok || !RETRYABLE_STATUS_CODES.has(response.status)) {
+        if (!response.ok) {
+          const body = await response.text()
+          throw new Error(`API error (${response.status}): ${body.slice(0, 200)}`)
+        }
+        return response
+      }
+
+      // Retryable status code — backoff and retry
+      if (attempt < retries) {
+        const baseDelay = Math.min(1000 * 2 ** attempt, 8000)
+        const jitter = Math.random() * baseDelay * 0.5
+        await new Promise((r) => setTimeout(r, baseDelay + jitter))
+        continue
+      }
+
+      const body = await response.text()
+      throw new Error(
+        `API error (${response.status}) after ${retries + 1} attempts: ${body.slice(0, 200)}`,
+      )
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err), { cause: err })
+      if (lastError.name === 'TimeoutError' || lastError.name === 'AbortError') {
+        if (attempt < retries) {
+          continue
+        }
+        throw new Error(`Request timed out after ${timeoutMs}ms (${retries + 1} attempts)`, {
+          cause: err,
+        })
+      }
+      if (attempt >= retries) {
+        throw lastError
+      }
+    }
+  }
+
+  throw lastError ?? new Error('Request failed')
+}
+
 /**
  * OpenAI-compatible provider.
  * Works with OpenAI, Groq, Together, and any API that implements
@@ -30,16 +92,20 @@ export class OpenAIProvider implements AIProvider {
   async generate(request: AITextRequest): Promise<string[]> {
     const prompt = buildPrompt(request)
 
-    const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+    const response = await fetchWithRetry(`${this.baseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({
         model: this.model,
         messages: [
-          { role: 'system', content: 'You are a test data generator. You produce realistic, varied text for database seed data.' },
+          {
+            role: 'system',
+            content:
+              'You are a test data generator. You produce realistic, varied text for database seed data.',
+          },
           { role: 'user', content: prompt },
         ],
         temperature: this.temperature,
@@ -47,14 +113,7 @@ export class OpenAIProvider implements AIProvider {
       }),
     })
 
-    if (!response.ok) {
-      const body = await response.text()
-      throw new Error(
-        `${this.name} API error (${response.status}): ${body.slice(0, 200)}`,
-      )
-    }
-
-    const data = await response.json() as {
+    const data = (await response.json()) as {
       choices: Array<{ message: { content: string } }>
     }
 
@@ -103,7 +162,12 @@ export function parseJsonArray(content: string, expectedCount: number): string[]
 function fallbackSplit(content: string, expectedCount: number): string[] {
   const lines = content
     .split('\n')
-    .map((line) => line.replace(/^\d+[.)]\s*/, '').replace(/^["'\-*]\s*/, '').trim())
+    .map((line) =>
+      line
+        .replace(/^\d+[.)]\s*/, '')
+        .replace(/^["'\-*]\s*/, '')
+        .trim(),
+    )
     .filter((line) => line.length > 0)
 
   return padToCount(lines, expectedCount)

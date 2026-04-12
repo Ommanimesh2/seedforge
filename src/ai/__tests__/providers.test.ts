@@ -74,12 +74,14 @@ describe('OpenAIProvider', () => {
   })
 
   it('sends correct request to OpenAI API', async () => {
-    fetchSpy.mockResolvedValueOnce(new Response(
-      JSON.stringify({
-        choices: [{ message: { content: '["desc 1", "desc 2", "desc 3"]' } }],
-      }),
-      { status: 200 },
-    ))
+    fetchSpy.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: '["desc 1", "desc 2", "desc 3"]' } }],
+        }),
+        { status: 200 },
+      ),
+    )
 
     const provider = new OpenAIProvider({ apiKey: 'sk-test' })
     const result = await provider.generate(mockRequest)
@@ -94,12 +96,14 @@ describe('OpenAIProvider', () => {
   })
 
   it('uses custom base URL', async () => {
-    fetchSpy.mockResolvedValueOnce(new Response(
-      JSON.stringify({
-        choices: [{ message: { content: '["a", "b", "c"]' } }],
-      }),
-      { status: 200 },
-    ))
+    fetchSpy.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: '["a", "b", "c"]' } }],
+        }),
+        { status: 200 },
+      ),
+    )
 
     const provider = new OpenAIProvider({
       apiKey: 'test',
@@ -111,11 +115,11 @@ describe('OpenAIProvider', () => {
     expect(url).toBe('https://custom.api.com/v1/chat/completions')
   })
 
-  it('throws on API error', async () => {
-    fetchSpy.mockResolvedValueOnce(new Response('Rate limited', { status: 429 }))
+  it('throws on non-retryable API error', async () => {
+    fetchSpy.mockResolvedValueOnce(new Response('Unauthorized', { status: 401 }))
 
     const provider = new OpenAIProvider({ apiKey: 'sk-test' })
-    await expect(provider.generate(mockRequest)).rejects.toThrow('429')
+    await expect(provider.generate(mockRequest)).rejects.toThrow('401')
   })
 
   it('estimates tokens', () => {
@@ -137,12 +141,14 @@ describe('AnthropicProvider', () => {
   })
 
   it('sends correct request to Anthropic API', async () => {
-    fetchSpy.mockResolvedValueOnce(new Response(
-      JSON.stringify({
-        content: [{ type: 'text', text: '["bio 1", "bio 2", "bio 3"]' }],
-      }),
-      { status: 200 },
-    ))
+    fetchSpy.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          content: [{ type: 'text', text: '["bio 1", "bio 2", "bio 3"]' }],
+        }),
+        { status: 200 },
+      ),
+    )
 
     const provider = new AnthropicProvider({ apiKey: 'sk-ant-test' })
     const result = await provider.generate(mockRequest)
@@ -178,10 +184,11 @@ describe('OllamaProvider', () => {
     // First call: ensureRunning (GET /api/tags)
     fetchSpy.mockResolvedValueOnce(new Response('{"models":[]}', { status: 200 }))
     // Second call: generate
-    fetchSpy.mockResolvedValueOnce(new Response(
-      JSON.stringify({ message: { content: '["text 1", "text 2", "text 3"]' } }),
-      { status: 200 },
-    ))
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ message: { content: '["text 1", "text 2", "text 3"]' } }), {
+        status: 200,
+      }),
+    )
 
     const provider = new OllamaProvider({ model: 'llama3.2' })
     const result = await provider.generate(mockRequest)
@@ -203,10 +210,9 @@ describe('OllamaProvider', () => {
 
   it('uses custom base URL', async () => {
     fetchSpy.mockResolvedValueOnce(new Response('{"models":[]}', { status: 200 }))
-    fetchSpy.mockResolvedValueOnce(new Response(
-      JSON.stringify({ message: { content: '["a", "b", "c"]' } }),
-      { status: 200 },
-    ))
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ message: { content: '["a", "b", "c"]' } }), { status: 200 }),
+    )
 
     const provider = new OllamaProvider({ baseUrl: 'http://gpu-server:11434' })
     await provider.generate(mockRequest)

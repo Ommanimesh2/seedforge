@@ -11,6 +11,9 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20, 22]
     permissions:
       contents: write
       id-token: write
@@ -18,25 +21,30 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ matrix.node-version }}
           registry-url: https://registry.npmjs.org
       - run: npm ci
       - run: npm run build
       - run: npm run lint
 
-      # Unit tests and e2e tests in parallel
-      - name: Run unit tests & e2e tests
-        run: npm run test & npm run test:e2e & wait
+      # Unit tests with coverage
+      - name: Run unit tests with coverage
+        run: npx vitest run --coverage
 
-      # Publish + release only on version tags
+      # e2e tests (Docker-based, only on Node 20 to avoid duplicate container work)
+      - name: Run e2e tests
+        if: matrix.node-version == 20
+        run: npm run test:e2e
+
+      # Publish + release only on version tags (Node 20 only)
       - name: Publish to npm
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && matrix.node-version == 20
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && matrix.node-version == 20
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

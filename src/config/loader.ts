@@ -39,13 +39,23 @@ export function findConfigFile(startDir?: string): string | null {
  * Loads and parses a YAML config file, applying env var interpolation.
  * Returns the raw parsed object (not yet validated).
  */
-export function loadConfigFile(
-  filePath: string,
-): Record<string, unknown> {
+const MAX_CONFIG_SIZE_BYTES = 10 * 1024 * 1024 // 10 MB
+
+export function loadConfigFile(filePath: string): Record<string, unknown> {
   let content: string
   try {
+    const stat = fs.statSync(filePath)
+    if (stat.size > MAX_CONFIG_SIZE_BYTES) {
+      throw new ConfigError(
+        'SF5001',
+        `Config file too large: ${filePath} (${Math.round(stat.size / 1024 / 1024)}MB). Maximum size is 10MB.`,
+        ['Check that you are pointing to the correct config file'],
+        { filePath, size: stat.size },
+      )
+    }
     content = fs.readFileSync(filePath, 'utf-8')
   } catch (err) {
+    if (err instanceof ConfigError) throw err
     throw new ConfigError(
       'SF5001',
       `Cannot read config file: ${filePath}`,
@@ -62,9 +72,7 @@ export function loadConfigFile(
     throw new ConfigError(
       'SF5001',
       `Invalid YAML syntax in ${filePath}: ${yamlErr.message}`,
-      [
-        'Check YAML syntax — common issues: incorrect indentation, tabs instead of spaces',
-      ],
+      ['Check YAML syntax — common issues: incorrect indentation, tabs instead of spaces'],
       { filePath, line: yamlErr.linePos?.[0]?.line },
     )
   }
@@ -79,9 +87,7 @@ export function loadConfigFile(
     throw new ConfigError(
       'SF5002',
       'Config file must contain a YAML mapping (object) at the top level',
-      [
-        'The config file should start with key-value pairs, not a list or scalar',
-      ],
+      ['The config file should start with key-value pairs, not a list or scalar'],
       { filePath },
     )
   }
