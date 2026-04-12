@@ -37,10 +37,22 @@ export function formatCopyValue(value: unknown): string {
   }
 
   if (Array.isArray(value)) {
-    // PostgreSQL array literal format
+    // PostgreSQL array literal format with proper element escaping
     const formatted = value.map((v) => {
       if (v === null || v === undefined) return 'NULL'
-      return String(v)
+      const s = String(v)
+      // Elements containing commas, quotes, braces, backslashes, or whitespace must be quoted
+      if (
+        s.includes(',') ||
+        s.includes('"') ||
+        s.includes('{') ||
+        s.includes('}') ||
+        s.includes('\\') ||
+        /\s/.test(s)
+      ) {
+        return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'
+      }
+      return s
     })
     return csvQuote(`{${formatted.join(',')}}`)
   }
@@ -81,10 +93,7 @@ function csvQuote(str: string): string {
  * @param columns - Ordered column names
  * @returns CSV line (no trailing newline)
  */
-export function rowToCsvLine(
-  row: Record<string, unknown>,
-  columns: string[],
-): string {
+export function rowToCsvLine(row: Record<string, unknown>, columns: string[]): string {
   return columns.map((col) => formatCopyValue(row[col] ?? null)).join(',')
 }
 

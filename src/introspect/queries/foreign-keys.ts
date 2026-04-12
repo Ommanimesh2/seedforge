@@ -29,10 +29,10 @@ export async function queryForeignKeys(
     `SELECT
       c.relname AS table_name,
       con.conname AS constraint_name,
-      array_agg(DISTINCT a.attname ORDER BY a.attname) AS columns,
+      array_agg(a.attname ORDER BY k.ord) AS columns,
       ref_c.relname AS referenced_table,
       ref_n.nspname AS referenced_schema,
-      array_agg(DISTINCT ref_a.attname ORDER BY ref_a.attname) AS referenced_columns,
+      array_agg(ref_a.attname ORDER BY fk.ord) AS referenced_columns,
       con.confdeltype AS delete_action,
       con.confupdtype AS update_action,
       con.condeferrable AS is_deferrable,

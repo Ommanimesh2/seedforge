@@ -1,11 +1,7 @@
 import type { Faker } from '@faker-js/faker'
 import type { TableDef } from '../types/schema.js'
 import type { MappingResult } from '../mapping/types.js'
-import type {
-  GenerationConfig,
-  Row,
-  ExistingData,
-} from './types.js'
+import type { GenerationConfig, Row, ExistingData } from './types.js'
 import type { ReferencePoolManager } from './reference-pool.js'
 import type { UniqueTracker } from './unique-tracker.js'
 import { detectTimestampPairs, generateTimestampPair } from './timestamp-pairs.js'
@@ -74,7 +70,10 @@ export async function* generateTableStream(
   const timestampPairs = detectTimestampPairs(table)
 
   // Build FK column lookup
-  const fkColumnToFK = new Map<string, { fkName: string; fkColumns: string[]; refTable: string; refColumns: string[] }>()
+  const fkColumnToFK = new Map<
+    string,
+    { fkName: string; fkColumns: string[]; refTable: string; refColumns: string[] }
+  >()
   for (const fk of table.foreignKeys) {
     const refTable = `${fk.referencedSchema}.${fk.referencedTable}`
     for (const col of fk.columns) {
@@ -101,7 +100,10 @@ export async function* generateTableStream(
   }
 
   // Build timestamp pair lookup
-  const timestampPairMap = new Map<string, { pair: ReturnType<typeof detectTimestampPairs>[0]; role: 'created' | 'updated' }>()
+  const timestampPairMap = new Map<
+    string,
+    { pair: ReturnType<typeof detectTimestampPairs>[0]; role: 'created' | 'updated' }
+  >()
   for (const pair of timestampPairs) {
     timestampPairMap.set(pair.createdColumn, { pair, role: 'created' })
     timestampPairMap.set(pair.updatedColumn, { pair, role: 'updated' })
@@ -129,9 +131,10 @@ export async function* generateTableStream(
       if (column.isAutoIncrement) {
         const isPK = table.primaryKey?.columns.includes(columnName) ?? false
         if (isPK) {
-          const existingMax = existingData.existingPKs.length > 0
-            ? Math.max(...existingData.existingPKs.map(pk => Number(pk[0]) || 0))
-            : 0
+          const existingMax =
+            existingData.existingPKs.length > 0
+              ? Math.max(...existingData.existingPKs.map((pk) => Number(pk[0]) || 0))
+              : 0
           row[columnName] = existingMax + i + 1
         }
         continue
@@ -160,11 +163,7 @@ export async function* generateTableStream(
             }
             continue
           } else {
-            throw fkReferencePoolEmpty(
-              qualifiedName,
-              columnName,
-              fkInfo.refTable,
-            )
+            throw fkReferencePoolEmpty(qualifiedName, columnName, fkInfo.refTable)
           }
         }
 
@@ -212,19 +211,26 @@ export async function* generateTableStream(
 
       // Handle unique columns
       if (uniqueColumns.has(columnName)) {
-        const value = uniqueTracker.generateUnique(
-          qualifiedName,
-          columnName,
-          generator,
-          faker,
-          i,
-        )
+        let value = uniqueTracker.generateUnique(qualifiedName, columnName, generator, faker, i)
+
+        // Truncate strings to respect VARCHAR/CHAR maxLength
+        if (column.maxLength && typeof value === 'string' && value.length > column.maxLength) {
+          value = value.substring(0, column.maxLength).trimEnd()
+        }
+
         row[columnName] = value
         continue
       }
 
       // Default generation
-      row[columnName] = generator(faker, i)
+      let value = generator(faker, i)
+
+      // Truncate strings to respect VARCHAR/CHAR maxLength
+      if (column.maxLength && typeof value === 'string' && value.length > column.maxLength) {
+        value = value.substring(0, column.maxLength).trimEnd()
+      }
+
+      row[columnName] = value
     }
 
     // Extract PK values (always collected for FK resolution)
