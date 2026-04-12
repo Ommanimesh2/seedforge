@@ -27,9 +27,9 @@ jobs:
       - run: npm run build
       - run: npm run lint
 
-      # Unit tests with coverage
+      # Unit tests with coverage (exclude e2e — those need Docker)
       - name: Run unit tests with coverage
-        run: npx vitest run --coverage
+        run: npx vitest run --coverage --exclude 'src/__tests__/e2e/**'
 
       # e2e tests (Docker-based, only on Node 20 to avoid duplicate container work)
       - name: Run e2e tests
