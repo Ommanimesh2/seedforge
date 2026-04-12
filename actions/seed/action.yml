@@ -1,0 +1,124 @@
+name: 'seedforge seed'
+description: 'Seed a test database with realistic data using seedforge'
+branding:
+  icon: 'database'
+  color: 'green'
+
+inputs:
+  db:
+    description: 'Database connection string (postgres://, mysql://, sqlite:)'
+    required: true
+  count:
+    description: 'Rows per table'
+    default: '50'
+  seed:
+    description: 'PRNG seed for deterministic output'
+    required: false
+  config:
+    description: 'Path to .seedforge.yml config file'
+    required: false
+  exclude:
+    description: 'Space-separated tables to skip'
+    required: false
+  schema:
+    description: 'Database schema name'
+    default: 'public'
+  fast:
+    description: 'Use COPY-based bulk insertion (PostgreSQL only)'
+    default: 'false'
+  version:
+    description: 'seedforge version to install'
+    default: 'latest'
+
+outputs:
+  tables:
+    description: 'Number of tables seeded'
+    value: ${{ steps.seed.outputs.tables }}
+  rows:
+    description: 'Total rows inserted'
+    value: ${{ steps.seed.outputs.rows }}
+  duration:
+    description: 'Duration in milliseconds'
+    value: ${{ steps.seed.outputs.duration }}
+  details:
+    description: 'JSON object with per-table row counts'
+    value: ${{ steps.seed.outputs.details }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Cache npm packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.npm
+        key: seedforge-${{ inputs.version }}-${{ runner.os }}
+        restore-keys: seedforge-
+
+    - name: Seed database
+      id: seed
+      shell: bash
+      env:
+        INPUT_DB: ${{ inputs.db }}
+        INPUT_COUNT: ${{ inputs.count }}
+        INPUT_SEED: ${{ inputs.seed }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_EXCLUDE: ${{ inputs.exclude }}
+        INPUT_SCHEMA: ${{ inputs.schema }}
+        INPUT_FAST: ${{ inputs.fast }}
+        INPUT_VERSION: ${{ inputs.version }}
+      run: |
+        ARGS=(--db "$INPUT_DB" --count "$INPUT_COUNT" --schema "$INPUT_SCHEMA" --json --yes --quiet)
+
+        if [ -n "$INPUT_SEED" ]; then
+          ARGS+=(--seed "$INPUT_SEED")
+        fi
+
+        if [ -n "$INPUT_CONFIG" ]; then
+          ARGS+=(--config "$INPUT_CONFIG")
+        fi
+
+        if [ -n "$INPUT_EXCLUDE" ]; then
+          for table in $INPUT_EXCLUDE; do
+            ARGS+=(--exclude "$table")
+          done
+        fi
+
+        if [ "$INPUT_FAST" = "true" ]; then
+          ARGS+=(--fast)
+        fi
+
+        # Run seedforge — stdout is JSON only (--quiet --json), stderr shows npx/install logs
+        OUTPUT=$(npx -y "@otg-dev/seedforge@${INPUT_VERSION}" "${ARGS[@]}") || {
+          echo "::error::seedforge seed failed"
+          exit 1
+        }
+
+        # Parse JSON and set step outputs
+        TABLES=$(echo "$OUTPUT" | jq -r '.tablesSeeded')
+        ROWS=$(echo "$OUTPUT" | jq -r '.totalRowsInserted')
+        DURATION=$(echo "$OUTPUT" | jq -r '.elapsedMs')
+        DETAILS=$(echo "$OUTPUT" | jq -c '.rowsPerTable')
+
+        echo "tables=${TABLES}" >> "$GITHUB_OUTPUT"
+        echo "rows=${ROWS}" >> "$GITHUB_OUTPUT"
+        echo "duration=${DURATION}" >> "$GITHUB_OUTPUT"
+        echo "details=${DETAILS}" >> "$GITHUB_OUTPUT"
+
+        # Job summary
+        {
+          echo "### seedforge — Seed Summary"
+          echo ""
+          echo "| Metric | Value |"
+          echo "|--------|-------|"
+          echo "| Tables | ${TABLES} |"
+          echo "| Total rows | ${ROWS} |"
+          echo "| Duration | ${DURATION}ms |"
+          echo ""
+          echo "<details><summary>Per-table breakdown</summary>"
+          echo ""
+          echo "| Table | Rows |"
+          echo "|-------|------|"
+          echo "$OUTPUT" | jq -r '.rowsPerTable | to_entries[] | "| \(.key) | \(.value) |"'
+          echo ""
+          echo "</details>"
+        } >> "$GITHUB_STEP_SUMMARY"

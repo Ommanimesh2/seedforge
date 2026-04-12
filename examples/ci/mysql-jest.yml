@@ -1,0 +1,57 @@
+# Example: MySQL + Jest integration tests with seedforge
+#
+# Usage: copy this file to .github/workflows/ in your project.
+# Free tier friendly: single job, ~2-3 min total.
+
+name: Integration Tests (MySQL)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: password
+          MYSQL_DATABASE: testdb
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Seed the test database
+      - uses: Ommanimesh2/seedforge/actions/seed@v2
+        id: seed
+        with:
+          db: mysql://root:password@127.0.0.1:3306/testdb
+          count: 50
+          seed: 42
+
+      - run: npx jest --forceExit
+        env:
+          DATABASE_URL: mysql://root:password@127.0.0.1:3306/testdb
+
+      - uses: Ommanimesh2/seedforge/actions/report@v2
+        if: github.event_name == 'pull_request'
+        with:
+          tables: ${{ steps.seed.outputs.tables }}
+          rows: ${{ steps.seed.outputs.rows }}
+          duration: ${{ steps.seed.outputs.duration }}
+          details: ${{ steps.seed.outputs.details }}

@@ -1,6 +1,6 @@
 # seedforge — Project State
 
-## Status: v2.1.0 COMPLETE
+## Status: v2.3.0 IN PROGRESS
 
 ## v1 Phase Status (complete)
 | Phase | Status | Tests |
@@ -56,13 +56,32 @@
 | 6. CLI + pipeline wiring | DONE |
 | 7. Tests (38 new) | DONE |
 
+## v2.2.0 Phase Status
+| Phase | Status |
+|-------|--------|
+| AI provider abstraction (OpenAI, Anthropic, Ollama, Groq) | DONE |
+| Prompt builder + JSON array parser | DONE |
+| Batch text pool generation | DONE |
+| CLI flags (--ai, --ai-provider, --ai-model, --ai-columns) | DONE |
+| Config file integration | DONE |
+
+## v2.3.0 Phase Status (GitHub Actions)
+| Phase | Status |
+|-------|--------|
+| 1. seed action (composite, live DB) | DONE |
+| 2. export action (composite, schema-only) | DONE |
+| 3. report action (composite, PR comment) | DONE |
+| 4. Example workflows (PG, MySQL, SQLite, Prisma) | DONE |
+| 5. Test workflow (CI validation) | DONE |
+| 6. Version bump + release | PENDING |
+
 ## Next: v2.x Releases
 | Release | Theme | Status |
 |---------|-------|--------|
 | v2.0.0 | Programmatic TypeScript API | DONE |
 | v2.1.0 | Weighted Relationship Cardinality | DONE |
-| v2.2.0 | LLM-Enhanced Text Generation | PLANNED |
-| v2.3.0 | GitHub Action + CI/CD | PLANNED |
+| v2.2.0 | LLM-Enhanced Text Generation | DONE |
+| v2.3.0 | GitHub Action + CI/CD | IN PROGRESS |
 | v2.4.0 | Production Data Subset + Anonymize | PLANNED |
 
 See `.planning/v2/RELEASES.md` for overview.

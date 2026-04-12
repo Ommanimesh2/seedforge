@@ -1,0 +1,146 @@
+name: 'seedforge export'
+description: 'Generate a SQL seed file from schema definitions — no live database needed'
+branding:
+  icon: 'file-text'
+  color: 'blue'
+
+inputs:
+  prisma:
+    description: 'Path to Prisma schema file (.prisma)'
+    required: false
+  drizzle:
+    description: 'Path to Drizzle ORM schema file or directory'
+    required: false
+  typeorm:
+    description: 'Path to TypeORM entity classes directory'
+    required: false
+  jpa:
+    description: 'Path to JPA entity classes directory'
+    required: false
+  output:
+    description: 'SQL output file path'
+    default: 'seed.sql'
+  count:
+    description: 'Rows per table'
+    default: '50'
+  seed:
+    description: 'PRNG seed for deterministic output'
+    required: false
+  config:
+    description: 'Path to .seedforge.yml config file'
+    required: false
+  exclude:
+    description: 'Space-separated tables to skip'
+    required: false
+  version:
+    description: 'seedforge version to install'
+    default: 'latest'
+
+outputs:
+  output-path:
+    description: 'Path to the generated SQL file'
+    value: ${{ steps.export.outputs.output_path }}
+  tables:
+    description: 'Number of tables in the generated SQL'
+    value: ${{ steps.export.outputs.tables }}
+  rows:
+    description: 'Total rows in the generated SQL'
+    value: ${{ steps.export.outputs.rows }}
+  duration:
+    description: 'Generation duration in milliseconds'
+    value: ${{ steps.export.outputs.duration }}
+  details:
+    description: 'JSON object with per-table row counts'
+    value: ${{ steps.export.outputs.details }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Cache npm packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.npm
+        key: seedforge-${{ inputs.version }}-${{ runner.os }}
+        restore-keys: seedforge-
+
+    - name: Export SQL
+      id: export
+      shell: bash
+      env:
+        INPUT_PRISMA: ${{ inputs.prisma }}
+        INPUT_DRIZZLE: ${{ inputs.drizzle }}
+        INPUT_TYPEORM: ${{ inputs.typeorm }}
+        INPUT_JPA: ${{ inputs.jpa }}
+        INPUT_OUTPUT: ${{ inputs.output }}
+        INPUT_COUNT: ${{ inputs.count }}
+        INPUT_SEED: ${{ inputs.seed }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_EXCLUDE: ${{ inputs.exclude }}
+        INPUT_VERSION: ${{ inputs.version }}
+      run: |
+        ARGS=(--output "$INPUT_OUTPUT" --count "$INPUT_COUNT" --json --yes --quiet)
+
+        # Schema source (exactly one required)
+        if [ -n "$INPUT_PRISMA" ]; then
+          ARGS+=(--prisma "$INPUT_PRISMA")
+        elif [ -n "$INPUT_DRIZZLE" ]; then
+          ARGS+=(--drizzle "$INPUT_DRIZZLE")
+        elif [ -n "$INPUT_TYPEORM" ]; then
+          ARGS+=(--typeorm "$INPUT_TYPEORM")
+        elif [ -n "$INPUT_JPA" ]; then
+          ARGS+=(--jpa "$INPUT_JPA")
+        else
+          echo "::error::One of prisma, drizzle, typeorm, or jpa input is required"
+          exit 1
+        fi
+
+        if [ -n "$INPUT_SEED" ]; then
+          ARGS+=(--seed "$INPUT_SEED")
+        fi
+
+        if [ -n "$INPUT_CONFIG" ]; then
+          ARGS+=(--config "$INPUT_CONFIG")
+        fi
+
+        if [ -n "$INPUT_EXCLUDE" ]; then
+          for table in $INPUT_EXCLUDE; do
+            ARGS+=(--exclude "$table")
+          done
+        fi
+
+        OUTPUT=$(npx -y "@otg-dev/seedforge@${INPUT_VERSION}" "${ARGS[@]}") || {
+          echo "::error::seedforge export failed"
+          exit 1
+        }
+
+        TABLES=$(echo "$OUTPUT" | jq -r '.tablesSeeded')
+        ROWS=$(echo "$OUTPUT" | jq -r '.totalRowsInserted')
+        DURATION=$(echo "$OUTPUT" | jq -r '.elapsedMs')
+        DETAILS=$(echo "$OUTPUT" | jq -c '.rowsPerTable')
+
+        echo "output_path=${INPUT_OUTPUT}" >> "$GITHUB_OUTPUT"
+        echo "tables=${TABLES}" >> "$GITHUB_OUTPUT"
+        echo "rows=${ROWS}" >> "$GITHUB_OUTPUT"
+        echo "duration=${DURATION}" >> "$GITHUB_OUTPUT"
+        echo "details=${DETAILS}" >> "$GITHUB_OUTPUT"
+
+        # Job summary
+        FILE_SIZE=$(du -h "$INPUT_OUTPUT" | cut -f1)
+        {
+          echo "### seedforge — Export Summary"
+          echo ""
+          echo "| Metric | Value |"
+          echo "|--------|-------|"
+          echo "| Tables | ${TABLES} |"
+          echo "| Total rows | ${ROWS} |"
+          echo "| Duration | ${DURATION}ms |"
+          echo "| Output | \`${INPUT_OUTPUT}\` (${FILE_SIZE}) |"
+          echo ""
+          echo "<details><summary>Per-table breakdown</summary>"
+          echo ""
+          echo "| Table | Rows |"
+          echo "|-------|------|"
+          echo "$OUTPUT" | jq -r '.rowsPerTable | to_entries[] | "| \(.key) | \(.value) |"'
+          echo ""
+          echo "</details>"
+        } >> "$GITHUB_STEP_SUMMARY"

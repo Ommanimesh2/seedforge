@@ -1,0 +1,107 @@
+name: Test Actions
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'actions/**'
+      - '.github/workflows/test-actions.yml'
+  pull_request:
+    paths:
+      - 'actions/**'
+      - '.github/workflows/test-actions.yml'
+
+jobs:
+  # Test the export action (no DB, no service container — fastest possible)
+  test-export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build seedforge from source so we test current code, not the published package
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci && npm run build && npm link
+
+      - name: Export SQL from Prisma schema
+        id: export
+        uses: ./actions/export
+        with:
+          prisma: ./actions/test-fixtures/schema.prisma
+          output: test-seed.sql
+          count: 20
+          seed: 42
+          version: 'file:.'
+
+      - name: Verify outputs
+        shell: bash
+        run: |
+          echo "Tables: ${{ steps.export.outputs.tables }}"
+          echo "Rows:   ${{ steps.export.outputs.rows }}"
+          echo "Duration: ${{ steps.export.outputs.duration }}ms"
+          echo "Details: ${{ steps.export.outputs.details }}"
+
+          # Assertions
+          if [ "${{ steps.export.outputs.tables }}" -lt 1 ]; then
+            echo "::error::Expected at least 1 table"
+            exit 1
+          fi
+          if [ "${{ steps.export.outputs.rows }}" -lt 1 ]; then
+            echo "::error::Expected at least 1 row"
+            exit 1
+          fi
+          if [ ! -f test-seed.sql ]; then
+            echo "::error::SQL file not generated"
+            exit 1
+          fi
+          echo "Export action passed all checks"
+
+      - name: Show generated SQL (first 30 lines)
+        run: head -30 test-seed.sql
+
+  # Test the seed action with SQLite (no service container needed)
+  test-seed-sqlite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci && npm run build && npm link
+
+      # First generate a SQLite DB from the Prisma schema
+      - name: Create SQLite DB from schema
+        run: |
+          npx seedforge --prisma ./actions/test-fixtures/schema.prisma --output init.sql --count 0 --yes --quiet || true
+          # Use seedforge to seed directly into SQLite
+          npx seedforge --prisma ./actions/test-fixtures/schema.prisma --db sqlite:./test-action.db --count 5 --seed 1 --yes --quiet
+
+      - name: Seed SQLite database
+        id: seed
+        uses: ./actions/seed
+        with:
+          db: sqlite:./test-action.db
+          count: 10
+          seed: 42
+          version: 'file:.'
+
+      - name: Verify seed outputs
+        shell: bash
+        run: |
+          echo "Tables: ${{ steps.seed.outputs.tables }}"
+          echo "Rows:   ${{ steps.seed.outputs.rows }}"
+          echo "Duration: ${{ steps.seed.outputs.duration }}ms"
+
+          if [ "${{ steps.seed.outputs.tables }}" -lt 1 ]; then
+            echo "::error::Expected at least 1 table"
+            exit 1
+          fi
+          if [ "${{ steps.seed.outputs.rows }}" -lt 1 ]; then
+            echo "::error::Expected at least 1 row"
+            exit 1
+          fi
+          echo "Seed action passed all checks"

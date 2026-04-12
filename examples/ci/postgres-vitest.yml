@@ -1,0 +1,60 @@
+# Example: PostgreSQL + Vitest integration tests with seedforge
+#
+# Usage: copy this file to .github/workflows/ in your project.
+# Free tier friendly: single job, ~2-3 min total.
+
+name: Integration Tests (PostgreSQL)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: testdb
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Seed the test database
+      - uses: Ommanimesh2/seedforge/actions/seed@v2
+        id: seed
+        with:
+          db: postgres://postgres:postgres@localhost:5432/testdb
+          count: 50
+          seed: 42    # deterministic — same data every run
+
+      - run: npx vitest run
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/testdb
+
+      # Optional: post seed summary on PRs
+      - uses: Ommanimesh2/seedforge/actions/report@v2
+        if: github.event_name == 'pull_request'
+        with:
+          tables: ${{ steps.seed.outputs.tables }}
+          rows: ${{ steps.seed.outputs.rows }}
+          duration: ${{ steps.seed.outputs.duration }}
+          details: ${{ steps.seed.outputs.details }}
+          seed: '42'

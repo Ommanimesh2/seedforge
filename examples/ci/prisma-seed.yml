@@ -1,0 +1,50 @@
+# Example: Prisma schema -> SQL export (no live database)
+#
+# Usage: copy this file to .github/workflows/ in your project.
+# Free tier friendly: no service container, no DB, ~1 min total.
+# Great for validating that seed data stays compatible with your schema.
+
+name: Seed SQL Export (Prisma)
+
+on:
+  pull_request:
+    paths:
+      - 'prisma/schema.prisma'
+      - '.seedforge.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'prisma/schema.prisma'
+      - '.seedforge.yml'
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Generate SQL from Prisma schema — no database server needed
+      - uses: Ommanimesh2/seedforge/actions/export@v2
+        id: export
+        with:
+          prisma: ./prisma/schema.prisma
+          output: seed.sql
+          count: 100
+          seed: 42
+
+      # Upload the generated SQL as a build artifact
+      - uses: actions/upload-artifact@v4
+        with:
+          name: seed-sql
+          path: seed.sql
+          retention-days: 7
+
+      - uses: Ommanimesh2/seedforge/actions/report@v2
+        if: github.event_name == 'pull_request'
+        with:
+          tables: ${{ steps.export.outputs.tables }}
+          rows: ${{ steps.export.outputs.rows }}
+          duration: ${{ steps.export.outputs.duration }}
+          details: ${{ steps.export.outputs.details }}
+          mode: export

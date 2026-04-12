@@ -1,0 +1,47 @@
+# Example: SQLite + Playwright e2e tests with seedforge
+#
+# Usage: copy this file to .github/workflows/ in your project.
+# Free tier friendly: no service container needed, ~3-4 min total.
+
+name: E2E Tests (SQLite)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Create and seed a SQLite database (no server needed)
+      - uses: Ommanimesh2/seedforge/actions/seed@v2
+        id: seed
+        with:
+          db: sqlite:./test.db
+          count: 30
+          seed: 42
+
+      # Install Playwright browsers (cached)
+      - run: npx playwright install --with-deps chromium
+
+      - run: npx playwright test
+        env:
+          DATABASE_URL: sqlite:./test.db
+
+      - uses: Ommanimesh2/seedforge/actions/report@v2
+        if: github.event_name == 'pull_request'
+        with:
+          tables: ${{ steps.seed.outputs.tables }}
+          rows: ${{ steps.seed.outputs.rows }}
+          duration: ${{ steps.seed.outputs.duration }}
+          details: ${{ steps.seed.outputs.details }}

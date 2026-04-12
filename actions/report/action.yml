@@ -1,0 +1,100 @@
+name: 'seedforge report'
+description: 'Post a seedforge summary as a PR comment (updates existing comment on re-run)'
+branding:
+  icon: 'message-square'
+  color: 'yellow'
+
+inputs:
+  tables:
+    description: 'Number of tables seeded (from seed/export output)'
+    required: true
+  rows:
+    description: 'Total rows inserted (from seed/export output)'
+    required: true
+  duration:
+    description: 'Duration in milliseconds (from seed/export output)'
+    required: true
+  details:
+    description: 'JSON object with per-table row counts (from seed/export output)'
+    required: true
+  mode:
+    description: 'How the data was generated: seed or export'
+    default: 'seed'
+  seed:
+    description: 'PRNG seed used (optional, shown in comment)'
+    required: false
+  config:
+    description: 'Config file path used (optional, shown in comment)'
+    required: false
+  github-token:
+    description: 'GitHub token for posting comments (default: github.token)'
+    default: ${{ github.token }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Post PR comment
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        INPUT_TABLES: ${{ inputs.tables }}
+        INPUT_ROWS: ${{ inputs.rows }}
+        INPUT_DURATION: ${{ inputs.duration }}
+        INPUT_DETAILS: ${{ inputs.details }}
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_SEED: ${{ inputs.seed }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+      run: |
+        MARKER="<!-- seedforge-report -->"
+        MODE_LABEL="Seeded"
+        if [ "$INPUT_MODE" = "export" ]; then
+          MODE_LABEL="Exported"
+        fi
+
+        # Build per-table rows
+        TABLE_ROWS=$(echo "$INPUT_DETAILS" | jq -r 'to_entries | sort_by(.key)[] | "| \(.key) | \(.value) |"')
+
+        # Build footer with optional metadata
+        FOOTER=""
+        if [ -n "$INPUT_SEED" ]; then
+          FOOTER="Seed: \`${INPUT_SEED}\`"
+        fi
+        if [ -n "$INPUT_CONFIG" ]; then
+          if [ -n "$FOOTER" ]; then
+            FOOTER="${FOOTER} | "
+          fi
+          FOOTER="${FOOTER}Config: \`${INPUT_CONFIG}\`"
+        fi
+
+        # Compose comment body
+        BODY="${MARKER}
+        ### seedforge — ${MODE_LABEL} ${INPUT_ROWS} rows across ${INPUT_TABLES} tables in ${INPUT_DURATION}ms
+
+        | Table | Rows |
+        |-------|------|
+        ${TABLE_ROWS}
+
+        ${FOOTER}"
+
+        # Dedent (remove leading whitespace from heredoc-style string)
+        BODY=$(echo "$BODY" | sed 's/^        //')
+
+        # Find existing seedforge comment on this PR
+        COMMENT_ID=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+          --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id" \
+          2>/dev/null | head -1)
+
+        if [ -n "$COMMENT_ID" ]; then
+          # Update existing comment
+          gh api "repos/${REPO}/issues/${PR_NUMBER}/comments/${COMMENT_ID}" \
+            -X PATCH -f body="$BODY" --silent
+          echo "Updated existing PR comment #${COMMENT_ID}"
+        else
+          # Create new comment
+          gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            -f body="$BODY" --silent
+          echo "Posted new PR comment"
+        fi
