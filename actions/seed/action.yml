@@ -87,8 +87,15 @@ runs:
           ARGS+=(--fast)
         fi
 
+        # Use local binary if available, otherwise install via npx
+        if command -v seedforge &>/dev/null; then
+          SEEDFORGE_CMD="seedforge"
+        else
+          SEEDFORGE_CMD="npx -y @otg-dev/seedforge@${INPUT_VERSION}"
+        fi
+
         # Run seedforge — stdout is JSON only (--quiet --json), stderr shows npx/install logs
-        OUTPUT=$(npx -y "@otg-dev/seedforge@${INPUT_VERSION}" "${ARGS[@]}") || {
+        OUTPUT=$($SEEDFORGE_CMD "${ARGS[@]}") || {
           echo "::error::seedforge seed failed"
           exit 1
         }

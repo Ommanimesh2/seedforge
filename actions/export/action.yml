@@ -108,7 +108,14 @@ runs:
           done
         fi
 
-        OUTPUT=$(npx -y "@otg-dev/seedforge@${INPUT_VERSION}" "${ARGS[@]}") || {
+        # Use local binary if available, otherwise install via npx
+        if command -v seedforge &>/dev/null; then
+          SEEDFORGE_CMD="seedforge"
+        else
+          SEEDFORGE_CMD="npx -y @otg-dev/seedforge@${INPUT_VERSION}"
+        fi
+
+        OUTPUT=$($SEEDFORGE_CMD "${ARGS[@]}") || {
           echo "::error::seedforge export failed"
           exit 1
         }

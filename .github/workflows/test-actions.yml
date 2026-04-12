@@ -33,7 +33,6 @@ jobs:
           output: test-seed.sql
           count: 20
           seed: 42
-          version: 'file:.'
 
       - name: Verify outputs
         shell: bash
@@ -73,12 +72,35 @@ jobs:
           cache: npm
       - run: npm ci && npm run build && npm link
 
-      # First generate a SQLite DB from the Prisma schema
-      - name: Create SQLite DB from schema
+      # Create a SQLite DB with tables, then seed it.
+      # Step 1: export DDL from Prisma schema
+      # Step 2: apply DDL to a SQLite file using sqlite3 CLI
+      # Step 3: use the seed action to populate the tables
+      - name: Create SQLite DB with schema
         run: |
-          npx seedforge --prisma ./actions/test-fixtures/schema.prisma --output init.sql --count 0 --yes --quiet || true
-          # Use seedforge to seed directly into SQLite
-          npx seedforge --prisma ./actions/test-fixtures/schema.prisma --db sqlite:./test-action.db --count 5 --seed 1 --yes --quiet
+          sqlite3 test-action.db <<'EOSQL'
+          CREATE TABLE "User" (
+            "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+            "email" TEXT NOT NULL UNIQUE,
+            "name" TEXT NOT NULL,
+            "createdAt" TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+          CREATE TABLE "Post" (
+            "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+            "title" TEXT NOT NULL,
+            "body" TEXT NOT NULL,
+            "published" INTEGER NOT NULL DEFAULT 0,
+            "authorId" INTEGER NOT NULL REFERENCES "User"("id"),
+            "createdAt" TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+          CREATE TABLE "Comment" (
+            "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+            "text" TEXT NOT NULL,
+            "postId" INTEGER NOT NULL REFERENCES "Post"("id"),
+            "createdAt" TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+          EOSQL
+          echo "SQLite DB created with $(sqlite3 test-action.db '.tables' | wc -w) tables"
 
       - name: Seed SQLite database
         id: seed
@@ -87,7 +109,6 @@ jobs:
           db: sqlite:./test-action.db
           count: 10
           seed: 42
-          version: 'file:.'
 
       - name: Verify seed outputs
         shell: bash

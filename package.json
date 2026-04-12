@@ -67,6 +67,7 @@
     "@types/pg": "^8.20.0",
     "@types/pg-copy-streams": "^1.2.5",
     "@types/pg-format": "^1.0.5",
+    "@vitest/coverage-v8": "^4.1.4",
     "eslint": "^10.1.0",
     "husky": "^9.1.7",
     "lint-staged": "^16.4.0",
