@@ -8,6 +8,16 @@ import type { ProgressReporter } from '../progress.js'
 import { InsertionError } from '../../errors/index.js'
 
 /**
+ * Strip schema prefix from a qualified table name for SQLite SQL.
+ * SQLite uses "main" as its default schema, but INSERT INTO "main.User" is
+ * interpreted as a table literally named "main.User" — not schema-qualified.
+ */
+function sqliteTableName(qualifiedName: string): string {
+  const dotIndex = qualifiedName.indexOf('.')
+  return dotIndex !== -1 ? qualifiedName.slice(dotIndex + 1) : qualifiedName
+}
+
+/**
  * Execute INSERT statements directly against a SQLite database via better-sqlite3.
  *
  * Each table's inserts are wrapped in a transaction.
@@ -50,24 +60,22 @@ export function executeSqliteDirect(
       // Build prepared statement for this table
       const placeholders = columns.map(() => '?').join(', ')
       const escapedCols = columns.map((c) => `"${c}"`).join(', ')
-      const sql = `INSERT INTO "${tableName}" (${escapedCols}) VALUES (${placeholders})`
+      const sql = `INSERT INTO "${sqliteTableName(tableName)}" (${escapedCols}) VALUES (${placeholders})`
       const stmt = db.prepare(sql)
 
       // Wrap all inserts for this table in a single transaction
-      const insertAll = db.transaction(
-        (rowsToInsert: Record<string, unknown>[]) => {
-          let inserted = 0
-          for (const row of rowsToInsert) {
-            const values = columns.map((col) => prepareSqliteValue(row[col]))
-            stmt.run(...values)
-            inserted++
-            if (inserted % batchSize === 0) {
-              progress.updateTable(tableName, inserted, totalRows)
-            }
+      const insertAll = db.transaction((rowsToInsert: Record<string, unknown>[]) => {
+        let inserted = 0
+        for (const row of rowsToInsert) {
+          const values = columns.map((col) => prepareSqliteValue(row[col]))
+          stmt.run(...values)
+          inserted++
+          if (inserted % batchSize === 0) {
+            progress.updateTable(tableName, inserted, totalRows)
           }
-          return inserted
-        },
-      )
+        }
+        return inserted
+      })
 
       const insertedCount = insertAll(rows)
       progress.updateTable(tableName, insertedCount, totalRows)
@@ -111,10 +119,8 @@ export function executeSqliteDirect(
               const setCol = update.setColumns[i]
               const setValue = prepareSqliteValue(update.setValues[i])
 
-              const whereParts = update.pkColumns.map(
-                (col) => `"${col}" = ?`,
-              )
-              const sql = `UPDATE "${tableName}" SET "${setCol}" = ? WHERE ${whereParts.join(' AND ')}`
+              const whereParts = update.pkColumns.map((col) => `"${col}" = ?`)
+              const sql = `UPDATE "${sqliteTableName(tableName)}" SET "${setCol}" = ? WHERE ${whereParts.join(' AND ')}`
 
               const whereValues = update.pkValues.map(prepareSqliteValue)
               db.prepare(sql).run(setValue, ...whereValues)
@@ -126,8 +132,7 @@ export function executeSqliteDirect(
         applyUpdates()
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err)
-        const colName =
-          updates.length > 0 ? updates[0].setColumns.join(', ') : 'unknown'
+        const colName = updates.length > 0 ? updates[0].setColumns.join(', ') : 'unknown'
         throw new InsertionError(
           'SF4002',
           `Deferred UPDATE failed for ${tableName}.${colName}: ${detail}`,
