@@ -72,6 +72,61 @@ describe('TypeORM Entity Parser', () => {
     })
   })
 
+  // ─── Real-world TypeScript syntax ───────────────────────────────────────
+
+  describe('real-world TypeScript syntax', () => {
+    it('handles definite-assignment assertions (id!: number) under TS strict mode', () => {
+      const source = `
+        @Entity('users')
+        export class User {
+          @PrimaryGeneratedColumn()
+          id!: number;
+
+          @Column({ unique: true })
+          email!: string;
+
+          @Column({ name: 'first_name' })
+          firstName!: string;
+        }
+      `
+      const table = getTable(source, 'users')
+      expect(table).toBeDefined()
+      expect(table!.columns.has('id')).toBe(true)
+      expect(table!.columns.has('email')).toBe(true)
+      expect(table!.columns.has('first_name')).toBe(true)
+      expect(table!.primaryKey?.columns).toEqual(['id'])
+    })
+
+    it('handles export class + definite-assignment + ManyToOne relation', () => {
+      const source = `
+        @Entity('users')
+        export class User {
+          @PrimaryGeneratedColumn()
+          id!: number;
+          @Column()
+          email!: string;
+        }
+
+        @Entity('posts')
+        export class Post {
+          @PrimaryGeneratedColumn()
+          id!: number;
+          @Column()
+          title!: string;
+          @ManyToOne(() => User)
+          @JoinColumn({ name: 'author_id' })
+          author!: User;
+        }
+      `
+      const schema = parseOne(source)
+      const posts = schema.tables.get('posts')
+      expect(posts).toBeDefined()
+      expect(posts!.columns.has('author_id')).toBe(true)
+      expect(posts!.foreignKeys.length).toBe(1)
+      expect(posts!.foreignKeys[0].referencedTable).toBe('users')
+    })
+  })
+
   // ─── PrimaryGeneratedColumn ─────────────────────────────────────────────
 
   describe('@PrimaryGeneratedColumn', () => {
@@ -87,7 +142,9 @@ describe('TypeORM Entity Parser', () => {
       expect(col).toBeDefined()
       expect(col!.dataType).toBe(NormalizedType.INTEGER)
       expect(col!.isAutoIncrement).toBe(true)
-      expect(col!.isGenerated).toBe(true)
+      // isGenerated is reserved for PG GENERATED ALWAYS AS columns. Auto-inc
+      // PKs must not set it, or the row generator skips them and FKs break.
+      expect(col!.isGenerated).toBe(false)
       expect(col!.hasDefault).toBe(true)
 
       const table = getTable(source, 'items')
@@ -110,7 +167,7 @@ describe('TypeORM Entity Parser', () => {
       expect(col!.dataType).toBe(NormalizedType.UUID)
       expect(col!.nativeType).toBe('uuid')
       expect(col!.isAutoIncrement).toBe(false)
-      expect(col!.isGenerated).toBe(true)
+      expect(col!.isGenerated).toBe(false)
     })
 
     it('creates integer PK with "increment" arg', () => {
@@ -970,7 +1027,7 @@ describe('TypeORM Entity Parser', () => {
       expect(users.columns.get('is_active')!.hasDefault).toBe(true)
       expect(users.columns.get('created_at')!.dataType).toBe(NormalizedType.TIMESTAMPTZ)
       expect(users.columns.get('deleted_at')!.isNullable).toBe(true)
-      expect(users.uniqueConstraints.some(u => u.columns.includes('email'))).toBe(true)
+      expect(users.uniqueConstraints.some((u) => u.columns.includes('email'))).toBe(true)
 
       // Categories table (self-referencing)
       const categories = schema.tables.get('categories')!
@@ -981,12 +1038,12 @@ describe('TypeORM Entity Parser', () => {
       // Posts table
       const posts = schema.tables.get('posts')!
       expect(posts.foreignKeys.length).toBe(2)
-      const authorFK = posts.foreignKeys.find(fk => fk.columns[0] === 'author_id')
+      const authorFK = posts.foreignKeys.find((fk) => fk.columns[0] === 'author_id')
       expect(authorFK).toBeDefined()
       expect(authorFK!.referencedTable).toBe('users')
       expect(authorFK!.onDelete).toBe(FKAction.CASCADE)
 
-      const categoryFK = posts.foreignKeys.find(fk => fk.columns[0] === 'category_id')
+      const categoryFK = posts.foreignKeys.find((fk) => fk.columns[0] === 'category_id')
       expect(categoryFK).toBeDefined()
       expect(categoryFK!.referencedTable).toBe('categories')
 

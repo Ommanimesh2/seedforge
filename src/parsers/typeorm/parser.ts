@@ -24,11 +24,16 @@ function parseFKAction(raw: string | undefined): FKAction {
   if (!raw) return FKAction.NO_ACTION
   const upper = raw.toUpperCase().replace(/['"]/g, '').trim()
   switch (upper) {
-    case 'CASCADE': return FKAction.CASCADE
-    case 'SET NULL': return FKAction.SET_NULL
-    case 'SET DEFAULT': return FKAction.SET_DEFAULT
-    case 'RESTRICT': return FKAction.RESTRICT
-    default: return FKAction.NO_ACTION
+    case 'CASCADE':
+      return FKAction.CASCADE
+    case 'SET NULL':
+      return FKAction.SET_NULL
+    case 'SET DEFAULT':
+      return FKAction.SET_DEFAULT
+    case 'RESTRICT':
+      return FKAction.RESTRICT
+    default:
+      return FKAction.NO_ACTION
   }
 }
 
@@ -117,33 +122,60 @@ function tsTypeToNormalized(tsType: string): NormalizedType {
 
 function normalizedTypeToNative(nt: NormalizedType): string {
   switch (nt) {
-    case NormalizedType.VARCHAR: return 'varchar'
-    case NormalizedType.CHAR: return 'char'
-    case NormalizedType.TEXT: return 'text'
-    case NormalizedType.SMALLINT: return 'smallint'
-    case NormalizedType.INTEGER: return 'integer'
-    case NormalizedType.BIGINT: return 'bigint'
-    case NormalizedType.REAL: return 'real'
-    case NormalizedType.DOUBLE: return 'double precision'
-    case NormalizedType.DECIMAL: return 'decimal'
-    case NormalizedType.BOOLEAN: return 'boolean'
-    case NormalizedType.DATE: return 'date'
-    case NormalizedType.TIME: return 'time'
-    case NormalizedType.TIMESTAMP: return 'timestamp'
-    case NormalizedType.TIMESTAMPTZ: return 'timestamptz'
-    case NormalizedType.INTERVAL: return 'interval'
-    case NormalizedType.JSON: return 'json'
-    case NormalizedType.JSONB: return 'jsonb'
-    case NormalizedType.UUID: return 'uuid'
-    case NormalizedType.BYTEA: return 'bytea'
-    case NormalizedType.INET: return 'inet'
-    case NormalizedType.CIDR: return 'cidr'
-    case NormalizedType.MACADDR: return 'macaddr'
-    case NormalizedType.ENUM: return 'enum'
-    case NormalizedType.POINT: return 'point'
-    case NormalizedType.LINE: return 'line'
-    case NormalizedType.GEOMETRY: return 'geometry'
-    default: return 'text'
+    case NormalizedType.VARCHAR:
+      return 'varchar'
+    case NormalizedType.CHAR:
+      return 'char'
+    case NormalizedType.TEXT:
+      return 'text'
+    case NormalizedType.SMALLINT:
+      return 'smallint'
+    case NormalizedType.INTEGER:
+      return 'integer'
+    case NormalizedType.BIGINT:
+      return 'bigint'
+    case NormalizedType.REAL:
+      return 'real'
+    case NormalizedType.DOUBLE:
+      return 'double precision'
+    case NormalizedType.DECIMAL:
+      return 'decimal'
+    case NormalizedType.BOOLEAN:
+      return 'boolean'
+    case NormalizedType.DATE:
+      return 'date'
+    case NormalizedType.TIME:
+      return 'time'
+    case NormalizedType.TIMESTAMP:
+      return 'timestamp'
+    case NormalizedType.TIMESTAMPTZ:
+      return 'timestamptz'
+    case NormalizedType.INTERVAL:
+      return 'interval'
+    case NormalizedType.JSON:
+      return 'json'
+    case NormalizedType.JSONB:
+      return 'jsonb'
+    case NormalizedType.UUID:
+      return 'uuid'
+    case NormalizedType.BYTEA:
+      return 'bytea'
+    case NormalizedType.INET:
+      return 'inet'
+    case NormalizedType.CIDR:
+      return 'cidr'
+    case NormalizedType.MACADDR:
+      return 'macaddr'
+    case NormalizedType.ENUM:
+      return 'enum'
+    case NormalizedType.POINT:
+      return 'point'
+    case NormalizedType.LINE:
+      return 'line'
+    case NormalizedType.GEOMETRY:
+      return 'geometry'
+    default:
+      return 'text'
   }
 }
 
@@ -352,9 +384,9 @@ function splitIntoMembers(bodyContent: string): string[] {
   }
 
   // Group consecutive decorators that belong to the same property.
-  // A decorator block "owns" the property declaration (ending in ;).
-  // If a block between two @decorators has no semicolon, it's just
-  // a decorator for the same property as the next one.
+  // A decorator block "owns" the property declaration if it contains a
+  // property-declaration line (e.g. `id!: number;` or `id!: number` under ASI).
+  // Stacked decorators without a property line merge with the next decorator.
   let accumulatedStart = -1
 
   for (let i = 0; i < decoratorStarts.length; i++) {
@@ -365,12 +397,9 @@ function splitIntoMembers(bodyContent: string): string[] {
     const end = i + 1 < decoratorStarts.length ? decoratorStarts[i + 1] : bodyContent.length
     const block = bodyContent.slice(decoratorStarts[i], end).trim()
 
-    // Check if this block contains a semicolon (property declaration end)
-    const semiIdx = findPropertyEnd(block)
-    if (semiIdx !== -1) {
-      // This block has the property declaration — emit the accumulated member
+    if (blockHasPropertyDecl(block)) {
+      // Found the property declaration — emit the accumulated member
       let fullBlock = bodyContent.slice(accumulatedStart, end).trim()
-      // Trim to just up to the first semicolon (in the full accumulated block)
       const fullSemiIdx = findPropertyEnd(fullBlock)
       if (fullSemiIdx !== -1) {
         fullBlock = fullBlock.slice(0, fullSemiIdx + 1)
@@ -378,10 +407,37 @@ function splitIntoMembers(bodyContent: string): string[] {
       members.push(fullBlock)
       accumulatedStart = -1
     }
-    // else: no semicolon, this decorator will be merged with the next
+    // else: stacked decorator, merge with the next
   }
 
   return members
+}
+
+/**
+ * True if the block contains a property-declaration line like
+ * `id: number;`, `id!: number`, `firstName?: string`, etc. The line must
+ * live outside the decorator's parenthesised arguments.
+ */
+function blockHasPropertyDecl(block: string): boolean {
+  // Fast path: a ;-terminated member is always a property decl
+  if (findPropertyEnd(block) !== -1) return true
+
+  // Slow path: find a line outside decorator args matching `name[!?]?: type`
+  const lines = block.split('\n')
+  let parenDepth = 0
+  for (const rawLine of lines) {
+    const line = rawLine.trim()
+    // Track parenthesis depth across lines so we skip multi-line decorator args
+    const lineDepth = parenDepth
+    for (const ch of rawLine) {
+      if (ch === '(' || ch === '{' || ch === '[') parenDepth++
+      else if (ch === ')' || ch === '}' || ch === ']') parenDepth--
+    }
+    if (lineDepth !== 0) continue
+    if (line.length === 0 || line.startsWith('@') || line.startsWith('//')) continue
+    if (/^(\w+)\s*[!?]?\s*:\s*[^=]+$/.test(line)) return true
+  }
+  return false
 }
 
 function findPropertyEnd(block: string): number {
@@ -406,17 +462,22 @@ function findPropertyEnd(block: string): number {
 }
 
 /**
- * Extract the property declaration from a member block.
- * Finds the last line containing a semicolon and parses propertyName?: Type;
+ * Extract the property declaration from a member block. Handles:
+ *   propertyName: Type;
+ *   propertyName?: Type;
+ *   propertyName!: Type;         (definite-assignment, TS strict mode)
+ *   propertyName!: Type          (ASI — no semicolon)
  */
 function extractPropertyDecl(block: string): { propertyName: string; tsType: string } | null {
-  // Find the last line with a semicolon - that's the property declaration
   const lines = block.split('\n')
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim()
-    if (line.includes(';') && !line.startsWith('@')) {
-      const m = /(\w+)\s*(?:\?\s*)?:\s*([^;]+);/.exec(line)
-      if (m) return { propertyName: m[1], tsType: m[2].trim() }
+    if (line.length === 0 || line.startsWith('@') || line.startsWith('//')) continue
+    // Match both ;-terminated and ASI forms
+    const m = /^(\w+)\s*[!?]?\s*:\s*(.+?)\s*;?\s*$/.exec(line)
+    if (m && !m[2].includes('=')) {
+      // Exclude assignment lines like `foo = bar` inside decorator args
+      return { propertyName: m[1], tsType: m[2].replace(/;$/, '').trim() }
     }
   }
   return null
@@ -431,7 +492,14 @@ function parseColumnMember(block: string, knownEnums: ParsedEnum[]): ParsedColum
   const isUpdateDate = /@UpdateDateColumn\s*\(/.test(block)
   const isDeleteDate = /@DeleteDateColumn\s*\(/.test(block)
 
-  if (!isPrimaryGenerated && !isPrimaryColumn && !isColumn && !isCreateDate && !isUpdateDate && !isDeleteDate) {
+  if (
+    !isPrimaryGenerated &&
+    !isPrimaryColumn &&
+    !isColumn &&
+    !isCreateDate &&
+    !isUpdateDate &&
+    !isDeleteDate
+  ) {
     return null
   }
 
@@ -447,7 +515,7 @@ function parseColumnMember(block: string, knownEnums: ParsedEnum[]): ParsedColum
   let hasDefault = false
   let defaultValue: string | null = null
   let isAutoIncrement = false
-  let isGenerated = false
+  const isGenerated = false
   let maxLength: number | null = null
   let numericPrecision: number | null = null
   let numericScale: number | null = null
@@ -457,7 +525,8 @@ function parseColumnMember(block: string, knownEnums: ParsedEnum[]): ParsedColum
   if (isPrimaryGenerated) {
     isPrimary = true
     isAutoIncrement = true
-    isGenerated = true
+    // isGenerated = true is reserved for stored/computed columns (PG GENERATED
+    // ALWAYS AS). Auto-increment PKs use isAutoIncrement and hasDefault.
     hasDefault = true
 
     const args = extractDecoratorArgs(block, 'PrimaryGeneratedColumn')
@@ -481,7 +550,11 @@ function parseColumnMember(block: string, knownEnums: ParsedEnum[]): ParsedColum
             isAutoIncrement = false
           }
         }
-      } else if (!firstArg.startsWith('{') && !firstArg.startsWith("'") && !firstArg.startsWith('"')) {
+      } else if (
+        !firstArg.startsWith('{') &&
+        !firstArg.startsWith("'") &&
+        !firstArg.startsWith('"')
+      ) {
         // bare identifier, might be options object for second arg
         dataType = NormalizedType.INTEGER
         nativeType = 'integer'
@@ -640,7 +713,7 @@ function parseEnumArg(enumVal: string, knownEnums: ParsedEnum[]): string[] {
 
   // Enum reference: SomeEnum
   const enumName = trimmed.trim()
-  const found = knownEnums.find(e => e.name === enumName)
+  const found = knownEnums.find((e) => e.name === enumName)
   if (found) return found.values
 
   return []
@@ -806,7 +879,9 @@ export function parseTypeORMSource(source: string): ParsedEntity[] {
   return entities
 }
 
-export function parseTypeORMEntities(sources: Array<{ path: string; content: string }>): DatabaseSchema {
+export function parseTypeORMEntities(
+  sources: Array<{ path: string; content: string }>,
+): DatabaseSchema {
   const allEntities: ParsedEntity[] = []
   const allEnums: ParsedEnum[] = []
 
@@ -858,13 +933,13 @@ export function parseTypeORMEntities(sources: Array<{ path: string; content: str
         const thisTable = entity.tableName
 
         // Find PKs of both tables
-        const thisPkCol = entity.columns.find(c => c.isPrimary)
+        const thisPkCol = entity.columns.find((c) => c.isPrimary)
         const thisPkName = thisPkCol ? thisPkCol.name : 'id'
         const thisPkType = thisPkCol ? thisPkCol.columnDef.dataType : NormalizedType.INTEGER
 
         // For referenced table, try to find it
-        const refEntity = allEntities.find(e => e.className === rel.target)
-        const refPkCol = refEntity?.columns.find(c => c.isPrimary)
+        const refEntity = allEntities.find((e) => e.className === rel.target)
+        const refPkCol = refEntity?.columns.find((c) => c.isPrimary)
         const refPkName = refPkCol ? refPkCol.name : 'id'
         const refPkType = refPkCol ? refPkCol.columnDef.dataType : NormalizedType.INTEGER
 
@@ -952,8 +1027,8 @@ export function parseTypeORMEntities(sources: Array<{ path: string; content: str
         const referencedTable = classToTable.get(rel.target) ?? toSnakeCase(rel.target)
 
         // Find referenced PK
-        const refEntity = allEntities.find(e => e.className === rel.target)
-        const refPkCol = refEntity?.columns.find(c => c.isPrimary)
+        const refEntity = allEntities.find((e) => e.className === rel.target)
+        const refPkCol = refEntity?.columns.find((c) => c.isPrimary)
         const refPkName = refPkCol ? refPkCol.name : 'id'
         const refPkType = refPkCol ? refPkCol.columnDef.dataType : NormalizedType.INTEGER
 
@@ -991,9 +1066,8 @@ export function parseTypeORMEntities(sources: Array<{ path: string; content: str
       }
     }
 
-    const primaryKey: PrimaryKeyDef | null = pkColumns.length > 0
-      ? { columns: pkColumns, name: `PK_${entity.tableName}` }
-      : null
+    const primaryKey: PrimaryKeyDef | null =
+      pkColumns.length > 0 ? { columns: pkColumns, name: `PK_${entity.tableName}` } : null
 
     tables.set(entity.tableName, {
       name: entity.tableName,
@@ -1075,7 +1149,12 @@ export function scanDirectory(dirPath: string): Array<{ path: string; content: s
       const stat = statSync(fullPath)
       if (stat.isDirectory()) {
         walk(fullPath)
-      } else if (entry.endsWith('.ts') && !entry.endsWith('.d.ts') && !entry.endsWith('.test.ts') && !entry.endsWith('.spec.ts')) {
+      } else if (
+        entry.endsWith('.ts') &&
+        !entry.endsWith('.d.ts') &&
+        !entry.endsWith('.test.ts') &&
+        !entry.endsWith('.spec.ts')
+      ) {
         const content = readFileSync(fullPath, 'utf-8')
         if (content.includes('@Entity')) {
           sources.push({ path: fullPath, content })
