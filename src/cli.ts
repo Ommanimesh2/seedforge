@@ -20,6 +20,8 @@ import { buildCardinalityFromConfig } from './generate/cardinality.js'
 import { executeOutput, resolveOutputMode, OutputMode, ProgressReporter } from './output/index.js'
 import type { DatabaseSchema } from './types/schema.js'
 import type { Client } from 'pg'
+import { filterSchema } from './schema/filter.js'
+import { inspectSchema, formatInspectReport } from './schema/inspect.js'
 
 const require = createRequire(import.meta.url)
 const pkg = require('../package.json') as { version: string }
@@ -38,6 +40,9 @@ export interface CliOptions {
   output?: string
   schema: string
   exclude: string[]
+  only?: string[]
+  strictOnly: boolean
+  inspect: boolean
   verbose: boolean
   quiet: boolean
   debug: boolean
@@ -57,8 +62,10 @@ function logSchemaStats(schema: DatabaseSchema, label: string, options: CliOptio
 
   const tableCount = schema.tables.size
   const enumCount = schema.enums.size
-  const fkCount = Array.from(schema.tables.values())
-    .reduce((sum, t) => sum + t.foreignKeys.length, 0)
+  const fkCount = Array.from(schema.tables.values()).reduce(
+    (sum, t) => sum + t.foreignKeys.length,
+    0,
+  )
   console.log(`${label} ${tableCount} tables, ${enumCount} enums, ${fkCount} foreign keys`)
 
   if (options.verbose) {
@@ -80,6 +87,85 @@ function logSchemaStats(schema: DatabaseSchema, label: string, options: CliOptio
     }
     console.log(JSON.stringify(serializable, null, 2))
   }
+}
+
+/**
+ * Apply --only filtering and --inspect mode to a freshly parsed schema.
+ *
+ * Returns either a filtered schema to continue generation with, or `null`
+ * when --inspect was requested and the caller should stop.
+ *
+ * Filtering happens before inspection so users can combine --only with
+ * --inspect to ask "what subset will seedforge actually generate for
+ * these tables?"
+ */
+function applyFiltersAndInspect(
+  schema: DatabaseSchema,
+  options: CliOptions,
+): DatabaseSchema | null {
+  let effectiveSchema = schema
+  const excludePatterns = options.exclude ?? []
+
+  if ((options.only && options.only.length > 0) || excludePatterns.length > 0) {
+    const filterResult = filterSchema(schema, {
+      only: options.only,
+      exclude: excludePatterns,
+      includeFKAncestors: !options.strictOnly,
+    })
+
+    if (filterResult.missing.length > 0) {
+      throw new ConfigError(
+        'SF5040',
+        `--only references tables that do not exist in the schema: ${filterResult.missing.join(', ')}`,
+        [
+          'Check that the table names match your schema (case-sensitive)',
+          'Use --inspect to see the full list of detected tables',
+        ],
+        { missing: filterResult.missing },
+      )
+    }
+
+    if (options.strictOnly && filterResult.autoIncluded.length > 0 && options.only) {
+      throw new ConfigError(
+        'SF5041',
+        `--strict-only is set but these tables would need to be generated to satisfy FKs: ${filterResult.autoIncluded.join(', ')}`,
+        ['Drop --strict-only to auto-include them', 'Or add them to --only explicitly'],
+        { autoIncluded: filterResult.autoIncluded },
+      )
+    }
+
+    if (!options.quiet && options.only && options.only.length > 0) {
+      const parts: string[] = []
+      parts.push(`--only kept ${filterResult.selected.length} requested table(s)`)
+      if (filterResult.autoIncluded.length > 0) {
+        parts.push(
+          `+ ${filterResult.autoIncluded.length} FK ancestor(s): ${filterResult.autoIncluded.join(', ')}`,
+        )
+      }
+      if (filterResult.excluded.length > 0) {
+        parts.push(`− ${filterResult.excluded.length} excluded`)
+      }
+      console.log(parts.join(' '))
+    }
+
+    effectiveSchema = filterResult.schema
+  }
+
+  if (options.inspect) {
+    const report = inspectSchema(effectiveSchema)
+    if (options.json) {
+      const serializable = {
+        ...report,
+        // insertOrder is already string[], tables is already plain objects
+      }
+      console.log(JSON.stringify(serializable, null, 2))
+    } else {
+      console.log(formatInspectReport(report))
+    }
+    return null
+  }
+
+  return effectiveSchema
 }
 
 /**
@@ -133,8 +219,10 @@ async function generateAndOutput(
   })
 
   if (!options.quiet) {
-    const totalRows = Array.from(generationResult.tables.values())
-      .reduce((sum, t) => sum + t.rows.length, 0)
+    const totalRows = Array.from(generationResult.tables.values()).reduce(
+      (sum, t) => sum + t.rows.length,
+      0,
+    )
     console.log(`Generated ${totalRows} rows across ${generationResult.tables.size} tables`)
   }
 
@@ -148,13 +236,7 @@ async function generateAndOutput(
     fast: options.fast,
   }
 
-  const summary = await executeOutput(
-    generationResult,
-    schema,
-    plan,
-    outputOptions,
-    pkg.version,
-  )
+  const summary = await executeOutput(generationResult, schema, plan, outputOptions, pkg.version)
 
   if (options.json) {
     const jsonSummary = {
@@ -191,7 +273,15 @@ async function handleParserPath(
   }
 
   try {
-    await generateAndOutput(schema, client, options, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
+    await generateAndOutput(
+      schema,
+      client,
+      options,
+      effectiveCount,
+      effectiveSeed,
+      tableCardinalityConfigs,
+      aiConfig,
+    )
   } finally {
     if (client) {
       await disconnect(client)
@@ -208,7 +298,10 @@ export function createProgram(): Command {
     .name('seedforge')
     .description('Generate realistic seed data from your database schema')
     .version(pkg.version)
-    .option('--db <url>', 'database connection string (postgres://, mysql://, sqlite:, or .db/.sqlite path)')
+    .option(
+      '--db <url>',
+      'database connection string (postgres://, mysql://, sqlite:, or .db/.sqlite path)',
+    )
     .option('--drizzle <path>', 'path to Drizzle ORM schema file or directory')
     .option('--prisma <path>', 'path to Prisma schema file (.prisma)')
     .option('--jpa <path>', 'path to JPA entity classes directory')
@@ -221,6 +314,16 @@ export function createProgram(): Command {
     .option('--output <file>', 'SQL file export path')
     .option('--schema <name>', 'database schema to introspect', 'public')
     .option('--exclude <tables...>', 'tables to skip')
+    .option(
+      '--only <tables...>',
+      'generate data ONLY for these tables (FK ancestors are auto-included)',
+    )
+    .option('--strict-only', 'with --only, error instead of auto-including FK ancestors', false)
+    .option(
+      '--inspect',
+      'describe detected tables, constraints, and generation order — no data is produced',
+      false,
+    )
     .option('--verbose', 'verbose logging', false)
     .option('--quiet', 'suppress non-essential output', false)
     .option('--debug', 'debug logging', false)
@@ -231,7 +334,9 @@ export function createProgram(): Command {
     .option('--ai-provider <provider>', 'AI provider: openai, anthropic, ollama, groq')
     .option('--ai-model <model>', 'AI model name (provider-specific)')
     .option('--ai-columns <columns...>', 'columns for AI text: table.column or column')
-    .addHelpText('after', `
+    .addHelpText(
+      'after',
+      `
 Examples:
   $ seedforge --db postgres://localhost/mydb
   $ seedforge --db mysql://root:pass@localhost/mydb
@@ -244,11 +349,14 @@ Examples:
   $ seedforge --jpa ./src/main/java/com/example/entities/ --output seed.sql --dry-run
   $ seedforge --typeorm ./src/entities/ --output seed.sql --dry-run
   $ seedforge --config .seedforge.yml
-`)
+`,
+    )
     .action(async (options: CliOptions) => {
       // Build CLI overrides: only include values explicitly passed by the user
       const cliOverrides: CliOverrides = {}
-      const optionSources = program as unknown as { getOptionValueSource(name: string): string | undefined }
+      const optionSources = program as unknown as {
+        getOptionValueSource(name: string): string | undefined
+      }
       if (typeof optionSources.getOptionValueSource === 'function') {
         if (optionSources.getOptionValueSource('db') === 'cli') {
           cliOverrides.db = options.db
@@ -288,26 +396,30 @@ Examples:
       const effectiveSchema = mergedConfig.connection.schema ?? options.schema ?? 'public'
       const effectiveCount = mergedConfig.count
       const effectiveSeed = mergedConfig.seed
-      const tableCardinalityConfigs = Object.keys(mergedConfig.tables).length > 0
-        ? buildCardinalityFromConfig(mergedConfig.tables, effectiveSchema)
-        : undefined
+      const tableCardinalityConfigs =
+        Object.keys(mergedConfig.tables).length > 0
+          ? buildCardinalityFromConfig(mergedConfig.tables, effectiveSchema)
+          : undefined
 
       // Build AI config from CLI flags + config file
-      const aiConfig = (options.ai || mergedConfig.ai?.enabled)
-        ? {
-            enabled: true,
-            provider: (options.aiProvider ?? mergedConfig.ai?.provider) as import('./ai/types.js').AIProviderType | undefined,
-            model: options.aiModel ?? mergedConfig.ai?.model,
-            baseUrl: mergedConfig.ai?.baseUrl,
-            apiKey: mergedConfig.ai?.apiKey,
-            columns: options.aiColumns ?? mergedConfig.ai?.columns,
-            temperature: mergedConfig.ai?.temperature,
-            maxTokensPerField: mergedConfig.ai?.maxTokensPerField,
-            batchSize: mergedConfig.ai?.batchSize,
-            cache: mergedConfig.ai?.cache,
-            prompt: mergedConfig.ai?.prompt,
-          }
-        : undefined
+      const aiConfig =
+        options.ai || mergedConfig.ai?.enabled
+          ? {
+              enabled: true,
+              provider: (options.aiProvider ?? mergedConfig.ai?.provider) as
+                | import('./ai/types.js').AIProviderType
+                | undefined,
+              model: options.aiModel ?? mergedConfig.ai?.model,
+              baseUrl: mergedConfig.ai?.baseUrl,
+              apiKey: mergedConfig.ai?.apiKey,
+              columns: options.aiColumns ?? mergedConfig.ai?.columns,
+              temperature: mergedConfig.ai?.temperature,
+              maxTokensPerField: mergedConfig.ai?.maxTokensPerField,
+              batchSize: mergedConfig.ai?.batchSize,
+              cache: mergedConfig.ai?.cache,
+              prompt: mergedConfig.ai?.prompt,
+            }
+          : undefined
 
       // Determine connection URL
       const connectionUrl = mergedConfig.connection.url ?? options.db
@@ -320,7 +432,9 @@ Examples:
             const loaded = await loadSinglePlugin(pluginPath, process.cwd())
             pluginRegistry.register(loaded)
             if (options.verbose && !options.quiet) {
-              console.log(`Loaded plugin: ${loaded.plugin.name} v${loaded.plugin.version} (${loaded.type})`)
+              console.log(
+                `Loaded plugin: ${loaded.plugin.name} v${loaded.plugin.version} (${loaded.type})`,
+              )
             }
           } catch (err) {
             if (err instanceof PluginError) {
@@ -338,7 +452,13 @@ Examples:
       }
 
       // ─── Try parser plugin auto-detection ────────────────────────
-      if (!connectionUrl && !options.drizzle && !options.prisma && !options.jpa && !options.typeorm) {
+      if (
+        !connectionUrl &&
+        !options.drizzle &&
+        !options.prisma &&
+        !options.jpa &&
+        !options.typeorm
+      ) {
         const detectedParser = await pluginRegistry.detectParser(process.cwd())
         if (detectedParser) {
           if (!options.quiet) {
@@ -348,7 +468,17 @@ Examples:
 
           const schema = await detectedParser.parse(process.cwd())
           logSchemaStats(schema, 'Parsed', options)
-          await generateAndOutput(schema, null, options, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
+          const effective = applyFiltersAndInspect(schema, options)
+          if (effective === null) return
+          await generateAndOutput(
+            effective,
+            null,
+            options,
+            effectiveCount,
+            effectiveSeed,
+            tableCardinalityConfigs,
+            aiConfig,
+          )
           return
         }
       }
@@ -370,7 +500,18 @@ Examples:
 
         const schema = parsePrismaFile(prismaPath)
         logSchemaStats(schema, 'Parsed', options)
-        await handleParserPath(schema, connectionUrl, options, effectiveSchema, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
+        const effective = applyFiltersAndInspect(schema, options)
+        if (effective === null) return
+        await handleParserPath(
+          effective,
+          connectionUrl,
+          options,
+          effectiveSchema,
+          effectiveCount,
+          effectiveSeed,
+          tableCardinalityConfigs,
+          aiConfig,
+        )
         return
       }
 
@@ -387,7 +528,18 @@ Examples:
 
         const schema = parseDrizzleFile(options.drizzle, effectiveSchema)
         logSchemaStats(schema, 'Parsed', options)
-        await handleParserPath(schema, connectionUrl, options, effectiveSchema, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
+        const effective = applyFiltersAndInspect(schema, options)
+        if (effective === null) return
+        await handleParserPath(
+          effective,
+          connectionUrl,
+          options,
+          effectiveSchema,
+          effectiveCount,
+          effectiveSeed,
+          tableCardinalityConfigs,
+          aiConfig,
+        )
         return
       }
 
@@ -404,7 +556,18 @@ Examples:
 
         const schema = parseJpaDirectory(options.jpa, { schemaName: effectiveSchema })
         logSchemaStats(schema, 'Parsed', options)
-        await handleParserPath(schema, connectionUrl, options, effectiveSchema, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
+        const effective = applyFiltersAndInspect(schema, options)
+        if (effective === null) return
+        await handleParserPath(
+          effective,
+          connectionUrl,
+          options,
+          effectiveSchema,
+          effectiveCount,
+          effectiveSeed,
+          tableCardinalityConfigs,
+          aiConfig,
+        )
         return
       }
 
@@ -421,25 +584,32 @@ Examples:
 
         const schema = parseTypeORMDirectory(options.typeorm)
         logSchemaStats(schema, 'Parsed', options)
-        await handleParserPath(schema, connectionUrl, options, effectiveSchema, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
+        const effective = applyFiltersAndInspect(schema, options)
+        if (effective === null) return
+        await handleParserPath(
+          effective,
+          connectionUrl,
+          options,
+          effectiveSchema,
+          effectiveCount,
+          effectiveSeed,
+          tableCardinalityConfigs,
+          aiConfig,
+        )
         return
       }
 
       // ─── DB introspection path ───────────────────────────────────
       if (!connectionUrl) {
-        throw new ConfigError(
-          'SF5017',
-          'No database connection URL provided',
-          [
-            'Pass --db <url> on the command line',
-            'Or use --drizzle <path> to parse a Drizzle schema file',
-            'Or use --prisma <path> to parse a Prisma schema file',
-            'Or use --jpa <path> to parse JPA entity classes',
-            'Or use --typeorm <path> to parse TypeORM entity classes',
-            'Or set connection.url in .seedforge.yml',
-            'Or set DATABASE_URL environment variable and use ${DATABASE_URL} in config',
-          ],
-        )
+        throw new ConfigError('SF5017', 'No database connection URL provided', [
+          'Pass --db <url> on the command line',
+          'Or use --drizzle <path> to parse a Drizzle schema file',
+          'Or use --prisma <path> to parse a Prisma schema file',
+          'Or use --jpa <path> to parse JPA entity classes',
+          'Or use --typeorm <path> to parse TypeORM entity classes',
+          'Or set connection.url in .seedforge.yml',
+          'Or set DATABASE_URL environment variable and use ${DATABASE_URL} in config',
+        ])
       }
 
       // Detect database type from connection URL scheme
@@ -475,12 +645,35 @@ Examples:
       }
 
       if (dbType === DatabaseType.SQLITE) {
-        await handleSqlitePath(connectionUrl, options, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
+        await handleSqlitePath(
+          connectionUrl,
+          options,
+          effectiveCount,
+          effectiveSeed,
+          tableCardinalityConfigs,
+          aiConfig,
+        )
       } else if (dbType === DatabaseType.MYSQL) {
-        await handleMysqlPath(connectionUrl, options, effectiveSchema, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
+        await handleMysqlPath(
+          connectionUrl,
+          options,
+          effectiveSchema,
+          effectiveCount,
+          effectiveSeed,
+          tableCardinalityConfigs,
+          aiConfig,
+        )
       } else {
         // PostgreSQL path
-        await handlePostgresPath(connectionUrl, options, effectiveSchema, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
+        await handlePostgresPath(
+          connectionUrl,
+          options,
+          effectiveSchema,
+          effectiveCount,
+          effectiveSeed,
+          tableCardinalityConfigs,
+          aiConfig,
+        )
       }
     })
 
@@ -497,15 +690,19 @@ async function handleSqlitePath(
   tableCardinalityConfigs?: Map<string, import('./generate/cardinality.js').TableCardinalityConfig>,
   aiConfig?: import('./ai/types.js').AIConfig,
 ): Promise<void> {
-  const { connectSqlite, disconnectSqlite, extractSqlitePath } = await import('./introspect/sqlite/connection.js')
+  const { connectSqlite, disconnectSqlite, extractSqlitePath } =
+    await import('./introspect/sqlite/connection.js')
   const { introspectSqlite } = await import('./introspect/sqlite/introspect.js')
 
   const filePath = extractSqlitePath(connectionUrl)
   const sqliteDb = connectSqlite(filePath)
 
   try {
-    const schema = introspectSqlite(sqliteDb, filePath)
-    logSchemaStats(schema, 'Introspected', options)
+    const introspectedSchema = introspectSqlite(sqliteDb, filePath)
+    logSchemaStats(introspectedSchema, 'Introspected', options)
+    const filtered = applyFiltersAndInspect(introspectedSchema, options)
+    if (filtered === null) return
+    const schema = filtered
 
     const plan = buildInsertPlan(schema)
 
@@ -542,8 +739,10 @@ async function handleSqlitePath(
     })
 
     if (!options.quiet) {
-      const totalRows = Array.from(generationResult.tables.values())
-        .reduce((sum, t) => sum + t.rows.length, 0)
+      const totalRows = Array.from(generationResult.tables.values()).reduce(
+        (sum, t) => sum + t.rows.length,
+        0,
+      )
       console.log(`Generated ${totalRows} rows across ${generationResult.tables.size} tables`)
     }
 
@@ -618,8 +817,11 @@ async function handleMysqlPath(
 
   try {
     const mysqlDb = extractMysqlDatabase(connectionUrl, effectiveSchema)
-    const schema = await adapter.introspect(connection, mysqlDb)
-    logSchemaStats(schema, 'Introspected', options)
+    const introspectedSchema = await adapter.introspect(connection, mysqlDb)
+    logSchemaStats(introspectedSchema, 'Introspected', options)
+    const filtered = applyFiltersAndInspect(introspectedSchema, options)
+    if (filtered === null) return
+    const schema = filtered
 
     const plan = buildInsertPlan(schema)
 
@@ -656,8 +858,10 @@ async function handleMysqlPath(
     })
 
     if (!options.quiet) {
-      const totalRows = Array.from(generationResult.tables.values())
-        .reduce((sum, t) => sum + t.rows.length, 0)
+      const totalRows = Array.from(generationResult.tables.values()).reduce(
+        (sum, t) => sum + t.rows.length,
+        0,
+      )
       console.log(`Generated ${totalRows} rows across ${generationResult.tables.size} tables`)
     }
 
@@ -733,7 +937,17 @@ async function handlePostgresPath(
   try {
     const schema = await introspect(client, effectiveSchema)
     logSchemaStats(schema, 'Introspected', options)
-    await generateAndOutput(schema, client, options, effectiveCount, effectiveSeed, tableCardinalityConfigs, aiConfig)
+    const effective = applyFiltersAndInspect(schema, options)
+    if (effective === null) return
+    await generateAndOutput(
+      effective,
+      client,
+      options,
+      effectiveCount,
+      effectiveSeed,
+      tableCardinalityConfigs,
+      aiConfig,
+    )
   } finally {
     await disconnect(client)
   }
@@ -774,8 +988,7 @@ function extractMysqlDatabase(connectionUrl: string, fallback: string): string {
 }
 
 const isDirectRun =
-  process.argv[1] &&
-  (/cli\.[jt]s/.test(process.argv[1]) || /seedforge$/.test(process.argv[1]))
+  process.argv[1] && (/cli\.[jt]s/.test(process.argv[1]) || /seedforge$/.test(process.argv[1]))
 if (isDirectRun) {
   main()
 }

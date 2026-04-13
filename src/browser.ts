@@ -16,6 +16,22 @@
 // ─── Core generator ───────────────────────────────────────────────────────
 export { generateFromSchema } from './generate/generate-from-schema.js'
 
+// ─── Schema filtering & inspection ───────────────────────────────────────
+export { filterSchema } from './schema/filter.js'
+export type { FilterSchemaOptions, FilterResult } from './schema/filter.js'
+
+export { inspectSchema, formatInspectReport } from './schema/inspect.js'
+export type {
+  InspectReport,
+  InspectTable,
+  InspectColumn,
+  InspectForeignKey,
+  InspectUniqueConstraint,
+  InspectCheckConstraint,
+  InspectEnum,
+  InspectDeferredEdge,
+} from './schema/inspect.js'
+
 // ─── Mapping helpers (pure — faker only) ─────────────────────────────────
 export { mapTable, mapColumn } from './mapping/mapper.js'
 export { createSeededFaker } from './mapping/seeded-faker.js'

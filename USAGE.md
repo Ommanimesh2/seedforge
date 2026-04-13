@@ -147,8 +147,20 @@ seedforge --db postgres://localhost/mydb --count 100
 # Deterministic output (same seed = same data)
 seedforge --db postgres://localhost/mydb --seed 42
 
-# Exclude specific tables
-seedforge --db postgres://localhost/mydb --exclude schema_migrations audit_log
+# Exclude specific tables (glob patterns OK)
+seedforge --db postgres://localhost/mydb --exclude schema_migrations audit_*
+
+# Generate only a subset — FK ancestors are auto-included
+seedforge --db postgres://localhost/mydb --only users posts --count 500
+
+# Strict subset — error instead of auto-including FK ancestors
+seedforge --db postgres://localhost/mydb --only comments --strict-only
+
+# Describe detected schema (columns, constraints, FKs, insert order) without writing anything
+seedforge --db postgres://localhost/mydb --inspect
+
+# Machine-readable inspection report for CI
+seedforge --db postgres://localhost/mydb --inspect --json --quiet > schema.json
 
 # Verbose output (show column mappings, generation details)
 seedforge --db postgres://localhost/mydb --verbose

@@ -1,6 +1,6 @@
 {
   "name": "@otg-dev/seedforge",
-  "version": "2.4.1",
+  "version": "2.5.0",
   "description": "Generate realistic seed data from your database schema",
   "type": "module",
   "bin": {

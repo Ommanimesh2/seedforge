@@ -151,11 +151,24 @@ See [USAGE.md](USAGE.md) for the full programmatic API reference with examples.
 - **Deterministic output** -- pass `--seed` to get identical data every time, for reproducible CI/CD
 
 ### Relationships
-- **Foreign key resolution** -- topologically sorts tables and inserts in dependency order
+- **Foreign key resolution** -- topologically sorts tables and inserts in dependency order; supports one-to-one, one-to-many, and many-to-many (via join tables) out of the box
 - **Circular references** -- detects cycles and resolves them with deferred UPDATEs
 - **Self-referencing tables** -- generates tree structures with NULL roots, then fills parent references
+- **Composite foreign keys** -- threads multi-column FK references correctly
 - **Cardinality control** -- configure min..max child rows per parent with uniform, zipf, or normal distributions
 - **Existing data aware** -- augments existing data without unique constraint violations; resets sequences after seeding
+
+### Constraints
+Seedforge is constraint-aware, not just FK-aware. It honors:
+- **NOT NULL** -- required columns always get a value
+- **UNIQUE** (single + composite) -- retries until unique within the generated batch
+- **CHECK** constraints -- extracts literal sets like `role IN ('admin', 'editor')` and picks from them automatically
+- **Enums** -- native PostgreSQL/MySQL enum types and inferred enums from CHECK
+- **VARCHAR(n) / CHAR(n)** -- truncates generated strings to the declared length
+- **Numeric precision / scale** -- fits `DECIMAL(p,s)` columns correctly
+- **Defaults** -- leaves columns with `DEFAULT` expressions alone when they're optional
+- **Generated / identity columns** -- skipped; the DB fills them in
+- **FK actions** (`ON DELETE`, `ON UPDATE`) -- parsed and visible via `--inspect`
 
 ### Output & Performance
 - **Multiple output modes** -- insert directly, write a `.sql` file, or dry-run to preview
@@ -231,7 +244,10 @@ Options:
   --dry-run               Preview without executing
   --output <file>         SQL file export path
   --schema <name>         Database schema to introspect (default: "public")
-  --exclude <tables...>   Tables to skip
+  --only <tables...>      Generate data only for these tables (FK ancestors auto-included)
+  --strict-only           Error if --only requires FK ancestors not in the list
+  --exclude <tables...>   Tables to skip (glob patterns supported)
+  --inspect               Describe detected schema (columns, constraints, FKs, insert order) and exit
   --fast                  Use COPY-based insertion for PostgreSQL (faster)
   --verbose               Verbose logging
   --quiet                 Suppress non-essential output
@@ -250,7 +266,57 @@ Examples:
   $ seedforge --prisma ./prisma/schema.prisma --output seed.sql
   $ seedforge --drizzle ./src/db/schema.ts --db postgres://localhost/mydb
   $ seedforge --config .seedforge.yml
+  $ seedforge --db postgres://localhost/mydb --inspect
+  $ seedforge --db postgres://localhost/mydb --only users posts --count 500
+  $ seedforge --prisma ./schema.prisma --only Order --strict-only
 ```
+
+### Partial seeding (`--only`)
+
+By default seedforge generates rows for every table in the schema. Pass `--only`
+to restrict generation to a subset:
+
+```bash
+# Generate 500 rows each for users + posts only.
+seedforge --db $DATABASE_URL --only users posts --count 500
+```
+
+Any tables referenced via FK from the selected set are **auto-included** so the
+result stays referentially valid. For example, `--only comments` on a
+comments → posts → users graph will also seed `posts` and `users`.
+
+Pass `--strict-only` if you want an explicit error instead of auto-inclusion —
+useful in CI when you want to guarantee the exact list of tables that will be
+touched:
+
+```bash
+seedforge --db $DATABASE_URL --only comments --strict-only
+# ✖ SF5041: --only requires auto-included FK ancestors: posts, users
+```
+
+`--only` composes with `--exclude` (glob patterns) and with `--count` /
+`--seed` / `--output` / `--dry-run` / `--fast` as you'd expect.
+
+### Schema inspection (`--inspect`)
+
+Pass `--inspect` to get a structured description of what seedforge sees in
+your schema — columns, primary keys, foreign keys, unique + check constraints,
+enums, and the topological insert order — without generating any rows:
+
+```bash
+seedforge --prisma ./schema.prisma --inspect
+```
+
+Combine with `--json --quiet` to get a machine-readable `InspectReport` for
+scripting or CI audits:
+
+```bash
+seedforge --db $DATABASE_URL --inspect --json --quiet > schema.json
+```
+
+This is the same data structure the in-browser [playground](https://seedforge.ommmishra.in/#playground) shows in its
+"detected schema" panel, so you can verify locally what the CLI will do
+before you run it against a real database.
 
 ## How It Works
 
