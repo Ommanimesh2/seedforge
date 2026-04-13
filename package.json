@@ -1,6 +1,6 @@
 {
   "name": "@otg-dev/seedforge",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Generate realistic seed data from your database schema",
   "type": "module",
   "bin": {
@@ -12,6 +12,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js"
     }
   },
   "scripts": {

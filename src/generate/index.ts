@@ -1,5 +1,6 @@
 // Public API
 export { generate } from './generate.js'
+export { generateFromSchema } from './generate-from-schema.js'
 export { createGenerationConfig, getRowCount } from './config.js'
 
 // Distributions
@@ -41,10 +42,7 @@ export {
 
 // Streaming generation
 export { generateTableStream } from './stream-generate.js'
-export type {
-  StreamTableGenerationContext,
-  StreamTableGenerationMeta,
-} from './stream-generate.js'
+export type { StreamTableGenerationContext, StreamTableGenerationMeta } from './stream-generate.js'
 
 // Cardinality
 export {

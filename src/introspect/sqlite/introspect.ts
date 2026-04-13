@@ -2,7 +2,6 @@ import type { SqliteDatabase } from './connection.js'
 import type { DatabaseSchema } from '../../types/index.js'
 import { IntrospectError } from '../../errors/index.js'
 import { queryAllTables } from './queries.js'
-import path from 'node:path'
 
 /**
  * Introspect a SQLite database and return a DatabaseSchema.
@@ -13,10 +12,7 @@ import path from 'node:path'
  * @param dbPath - The file path to the database (used for the schema name)
  * @returns A DatabaseSchema representing the SQLite database
  */
-export function introspectSqlite(
-  db: SqliteDatabase,
-  dbPath: string = ':memory:',
-): DatabaseSchema {
+export function introspectSqlite(db: SqliteDatabase, dbPath: string = ':memory:'): DatabaseSchema {
   try {
     // SQLite has no native enums
     const enums = new Map()
@@ -28,7 +24,7 @@ export function introspectSqlite(
     const name =
       dbPath === ':memory:'
         ? 'memory'
-        : path.basename(dbPath, path.extname(dbPath))
+        : (dbPath.split(/[/\\]/).pop() ?? dbPath).replace(/\.[^.]+$/, '')
 
     return {
       name,

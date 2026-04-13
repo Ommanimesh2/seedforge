@@ -1,6 +1,9 @@
 // Tier 1: One-liner
 export { seed } from './seed.js'
 
+// Browser-safe pure generator (also re-exported from '@otg-dev/seedforge/browser')
+export { generateFromSchema } from '../generate/generate-from-schema.js'
+
 // Tier 2: Seeder instance
 export { createSeeder, Seeder } from './seeder.js'
 
