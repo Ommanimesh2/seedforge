@@ -22,11 +22,7 @@ export interface MysqlConnectOptions {
 }
 
 export async function connectMysql(options: MysqlConnectOptions): Promise<Connection> {
-  const {
-    connectionString,
-    timeoutMs = 10_000,
-    skipProductionCheck = false,
-  } = options
+  const { connectionString, timeoutMs = 10_000, skipProductionCheck = false } = options
 
   // Production safety check
   const host = extractHostFromConnectionString(connectionString)
@@ -37,6 +33,9 @@ export async function connectMysql(options: MysqlConnectOptions): Promise<Connec
     }
   }
 
+  // Note: mysql2 enables LOCAL_FILES as a default client capability flag, so
+  // --fast LOAD DATA LOCAL INFILE works without special options here as long
+  // as the server has `local_infile=ON`.
   try {
     const connection = await mysql.createConnection({
       uri: connectionString,
@@ -57,36 +56,36 @@ export async function disconnectMysql(connection: Connection): Promise<void> {
 }
 
 function connectionAborted(): ConnectionError {
-  return new ConnectionError(
-    'SF1006',
-    'Connection aborted by user',
-    ['Use --yes to skip production confirmation prompts'],
-  )
+  return new ConnectionError('SF1006', 'Connection aborted by user', [
+    'Use --yes to skip production confirmation prompts',
+  ])
 }
 
-function mapMysqlError(
-  err: unknown,
-  connectionString: string,
-  timeoutMs: number,
-): ConnectionError {
+function mapMysqlError(err: unknown, connectionString: string, timeoutMs: number): ConnectionError {
   if (!(err instanceof Error)) {
-    return new ConnectionError(
-      'SF1004',
-      'Unknown connection error',
-      ['Check your connection string and try again'],
-    )
+    return new ConnectionError('SF1004', 'Unknown connection error', [
+      'Check your connection string and try again',
+    ])
   }
 
   const mysqlErr = err as Error & { code?: string; errno?: number }
   const message = redactConnectionString(mysqlErr.message)
 
   // System-level errors
-  if (mysqlErr.code === 'ECONNREFUSED' || mysqlErr.code === 'ENOTFOUND' || mysqlErr.code === 'EHOSTUNREACH') {
+  if (
+    mysqlErr.code === 'ECONNREFUSED' ||
+    mysqlErr.code === 'ENOTFOUND' ||
+    mysqlErr.code === 'EHOSTUNREACH'
+  ) {
     const host = extractHostFromConnectionString(connectionString)
     return connectionFailed(host ?? 'unknown', 3306)
   }
 
-  if (mysqlErr.code === 'ETIMEDOUT' || mysqlErr.code === 'PROTOCOL_CONNECTION_LOST' || message.includes('timeout')) {
+  if (
+    mysqlErr.code === 'ETIMEDOUT' ||
+    mysqlErr.code === 'PROTOCOL_CONNECTION_LOST' ||
+    message.includes('timeout')
+  ) {
     return connectionTimeout(timeoutMs)
   }
 

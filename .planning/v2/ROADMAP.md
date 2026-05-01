@@ -17,14 +17,16 @@ v2 expands seedforge from a PostgreSQL-only CLI to a multi-database, multi-input
 - Domain-aware generators: stem match picks the best generator *within* the column's actual type
 - Unit tests for stemmer, scorer, and expanded domain dictionary
 
+**Status:** ✅ Shipped (v2.6.0). Porter stemmer + 467 stems across 16 domains wired into the mapper with type guardrails. Covered by stem-scorer unit tests and `v2-features.e2e.test.ts`.
+
 **Success Criteria:**
-- [ ] `financial_data_set TEXT` → finance domain text
-- [ ] `financial_data_set JSONB` → valid JSON (type wins)
-- [ ] `patient_diagnosis VARCHAR` → medical domain text
-- [ ] `vehicle_registration TEXT` → transport domain text
-- [ ] Zero new dependencies
-- [ ] <0.5ms per column
-- [ ] Existing 577 unit tests still pass
+- [x] `financial_data_set TEXT` → finance domain text
+- [x] `financial_data_set JSONB` → valid JSON (type wins)
+- [x] `patient_diagnosis VARCHAR` → medical domain text
+- [x] `vehicle_registration TEXT` → transport domain text
+- [x] Zero new dependencies
+- [x] <0.5ms per column
+- [x] Existing unit tests still pass (1447 green)
 
 ---
 
@@ -159,10 +161,14 @@ v2 expands seedforge from a PostgreSQL-only CLI to a multi-database, multi-input
 - `--fast` flag to enable COPY mode (default stays as batched INSERT for safety)
 - Benchmark suite: 10K, 100K, 1M rows across various schema sizes
 
+**Status:** ✅ Shipped (v2.6.0). Fused streaming pipeline (`generateAndStream`) wired to PG COPY and MySQL LOAD DATA LOCAL INFILE under `--fast`. Benchmark suite lives at `bench/run.ts` (`npm run bench`).
+
 **Success Criteria:**
-- [ ] 100K rows inserted in <5 seconds (PostgreSQL COPY)
-- [ ] Memory usage stays flat regardless of row count (streaming)
-- [ ] 1M rows feasible on standard hardware
+- [x] 100K rows inserted in <5 seconds (PostgreSQL COPY streaming)
+- [x] Memory usage stays flat regardless of row count (streaming — only rows for self-ref/cycle-broken tables are retained)
+- [x] 1M rows feasible on standard hardware
+- [x] MySQL LOAD DATA LOCAL INFILE path for `--fast` (parity with PG COPY)
+- [x] Benchmark suite under `bench/` with PG + MySQL testcontainers
 
 ---
 

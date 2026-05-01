@@ -211,6 +211,38 @@ async function generateAndOutput(
 
   const mode = resolveOutputMode(options)
   const generationClient = mode === OutputMode.DRY_RUN ? null : client
+
+  // --fast + direct + PG: fused streaming pipeline (flat memory).
+  if (options.fast && mode === OutputMode.DIRECT && client) {
+    const { executeFastPgPipeline } = await import('./output/executors/pg-copy-streaming.js')
+    const progress = new ProgressReporter({
+      quiet: options.quiet,
+      showProgress: !options.quiet,
+    })
+    const summary = await executeFastPgPipeline(
+      schema,
+      plan,
+      client,
+      {
+        globalRowCount: effectiveCount,
+        seed: effectiveSeed,
+        tableCardinalityConfigs,
+        aiTextPool,
+      },
+      progress,
+    )
+    progress.printSummary(summary)
+
+    if (options.json) {
+      const jsonSummary = {
+        ...summary,
+        rowsPerTable: Object.fromEntries(summary.rowsPerTable),
+      }
+      console.log(JSON.stringify(jsonSummary, null, 2))
+    }
+    return
+  }
+
   const generationResult = await generate(schema, plan, generationClient, {
     globalRowCount: effectiveCount,
     seed: effectiveSeed,
@@ -615,16 +647,13 @@ Examples:
       // Detect database type from connection URL scheme
       const dbType = detectDatabaseType(connectionUrl)
 
-      // Validate --fast flag: only supported with PostgreSQL
-      if (options.fast && dbType !== DatabaseType.POSTGRES) {
-        throw new ConfigError(
-          'SF5019',
-          'The --fast flag is only supported with PostgreSQL databases',
-          [
-            'Remove the --fast flag to use standard batched INSERTs',
-            'The --fast flag uses PostgreSQL COPY protocol which is not available for other databases',
-          ],
-        )
+      // Validate --fast flag: PG uses COPY, MySQL uses LOAD DATA LOCAL INFILE,
+      // SQLite has no streaming bulk-load protocol.
+      if (options.fast && dbType === DatabaseType.SQLITE) {
+        throw new ConfigError('SF5019', 'The --fast flag is not supported with SQLite', [
+          'Remove the --fast flag to use standard batched INSERTs',
+          'SQLite has no streaming bulk-load protocol equivalent to PG COPY or MySQL LOAD DATA',
+        ])
       }
 
       if (!options.quiet) {
@@ -850,6 +879,38 @@ async function handleMysqlPath(
     }
 
     const mode = resolveOutputMode(options)
+
+    // --fast + direct + MySQL: fused LOAD DATA LOCAL INFILE streaming path.
+    if (options.fast && mode === OutputMode.DIRECT) {
+      const { executeFastMysqlPipeline } = await import('./output/executors/mysql-load-data.js')
+      const mysqlConn = connection as import('mysql2/promise').Connection
+      const progress = new ProgressReporter({
+        quiet: options.quiet,
+        showProgress: !options.quiet,
+      })
+      const summary = await executeFastMysqlPipeline(
+        schema,
+        plan,
+        mysqlConn,
+        {
+          globalRowCount: effectiveCount,
+          seed: effectiveSeed,
+          tableCardinalityConfigs,
+          aiTextPool,
+        },
+        progress,
+      )
+      progress.printSummary(summary)
+      if (options.json) {
+        const jsonSummary = {
+          ...summary,
+          rowsPerTable: Object.fromEntries(summary.rowsPerTable),
+        }
+        console.log(JSON.stringify(jsonSummary, null, 2))
+      }
+      return
+    }
+
     const generationResult = await generate(schema, plan, null, {
       globalRowCount: effectiveCount,
       seed: effectiveSeed,

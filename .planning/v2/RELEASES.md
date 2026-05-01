@@ -11,6 +11,8 @@ v2 transforms seedforge from a CLI-only tool into a **full-stack test data platf
 | **v2.2.0** | `muse` | LLM-Enhanced Text Generation | Minor — optional AI integration |
 | **v2.3.0** | `pipeline` | GitHub Action + CI/CD | Minor — new package + docs |
 | **v2.4.0** | `mirror` | Production Data Subset + Anonymize | Minor — new subsystem |
+| **v2.5.0** | `scope`  | `--only` selective seeding + `--inspect` | Minor — CLI surface |
+| **v2.6.0** | `stream` | Fused `--fast` streaming (PG COPY + MySQL LOAD DATA) | Minor — scale/perf |
 
 ---
 

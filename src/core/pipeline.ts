@@ -27,16 +27,11 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
   const plan = buildInsertPlan(schema)
 
   // Determine output mode
-  const mode = dryRun
-    ? OutputMode.DRY_RUN
-    : output
-      ? OutputMode.FILE
-      : OutputMode.DIRECT
+  const mode = dryRun ? OutputMode.DRY_RUN : output ? OutputMode.FILE : OutputMode.DIRECT
 
   // For generation, only PG clients support existing-data queries
-  const genClient = connection.type === 'pg' && mode !== OutputMode.DRY_RUN
-    ? connection.client
-    : null
+  const genClient =
+    connection.type === 'pg' && mode !== OutputMode.DRY_RUN ? connection.client : null
 
   // Pre-generate AI text pool if AI is enabled
   let aiTextPool: Map<string, string[]> | undefined
@@ -50,6 +45,58 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
       quiet,
       skipConfirmation: true,
     })
+  }
+
+  // --fast + direct + PG: fused streaming pipeline, skip non-streaming generate()
+  if (fast && mode === OutputMode.DIRECT && connection.type === 'pg') {
+    const { executeFastPgPipeline } = await import('../output/executors/pg-copy-streaming.js')
+    const progress = new ProgressReporter({ quiet, showProgress: !quiet })
+    const fastSummary = await executeFastPgPipeline(
+      schema,
+      plan,
+      connection.client,
+      {
+        globalRowCount: count,
+        seed,
+        tableCardinalityConfigs: options.tableCardinalityConfigs,
+        aiTextPool,
+      },
+      progress,
+    )
+    progress.printSummary(fastSummary)
+    // Streaming path doesn't build a full GenerationResult; synthesize a minimal stub
+    // so PipelineResult's shape stays stable for existing callers.
+    const stubResult = {
+      tables: new Map(),
+      deferredUpdates: [],
+      warnings: fastSummary.warnings,
+    }
+    return { generationResult: stubResult, summary: fastSummary, plan, schema }
+  }
+
+  // --fast + direct + MySQL: fused LOAD DATA LOCAL INFILE streaming pipeline
+  if (fast && mode === OutputMode.DIRECT && connection.type === 'mysql') {
+    const { executeFastMysqlPipeline } = await import('../output/executors/mysql-load-data.js')
+    const progress = new ProgressReporter({ quiet, showProgress: !quiet })
+    const fastSummary = await executeFastMysqlPipeline(
+      schema,
+      plan,
+      connection.connection,
+      {
+        globalRowCount: count,
+        seed,
+        tableCardinalityConfigs: options.tableCardinalityConfigs,
+        aiTextPool,
+      },
+      progress,
+    )
+    progress.printSummary(fastSummary)
+    const stubResult = {
+      tables: new Map(),
+      deferredUpdates: [],
+      warnings: fastSummary.warnings,
+    }
+    return { generationResult: stubResult, summary: fastSummary, plan, schema }
   }
 
   const generationResult = await generate(schema, plan, genClient, {
@@ -90,9 +137,8 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
     // PG direct, file, or dry-run modes go through executeOutput
     const outputOptions = {
       mode,
-      client: mode === OutputMode.DIRECT && connection.type === 'pg'
-        ? connection.client
-        : undefined,
+      client:
+        mode === OutputMode.DIRECT && connection.type === 'pg' ? connection.client : undefined,
       filePath: output,
       batchSize,
       showProgress: !quiet,
@@ -100,13 +146,7 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
       fast,
     }
 
-    summary = await executeOutput(
-      generationResult,
-      schema,
-      plan,
-      outputOptions,
-      version,
-    )
+    summary = await executeOutput(generationResult, schema, plan, outputOptions, version)
   }
 
   return { generationResult, summary, plan, schema }
@@ -177,7 +217,8 @@ export async function connectAndIntrospect(
     }
 
     case DatabaseType.SQLITE: {
-      const { connectSqlite, disconnectSqlite, extractSqlitePath } = await import('../introspect/sqlite/connection.js')
+      const { connectSqlite, disconnectSqlite, extractSqlitePath } =
+        await import('../introspect/sqlite/connection.js')
       const { introspectSqlite } = await import('../introspect/sqlite/introspect.js')
       const filePath = extractSqlitePath(connectionUrl)
       const db = connectSqlite(filePath)
