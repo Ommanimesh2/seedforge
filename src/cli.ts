@@ -22,6 +22,7 @@ import type { DatabaseSchema } from './types/schema.js'
 import type { Client } from 'pg'
 import { filterSchema } from './schema/filter.js'
 import { inspectSchema, formatInspectReport } from './schema/inspect.js'
+import { discoverSources, formatDiscoverySuggestion } from './discover/index.js'
 
 const require = createRequire(import.meta.url)
 const pkg = require('../package.json') as { version: string }
@@ -42,6 +43,8 @@ export interface CliOptions {
   exclude: string[]
   only?: string[]
   strictOnly: boolean
+  /** False if user passed --no-auto. Defaults to true. */
+  auto?: boolean
   inspect: boolean
   verbose: boolean
   quiet: boolean
@@ -161,6 +164,14 @@ function applyFiltersAndInspect(
       console.log(JSON.stringify(serializable, null, 2))
     } else {
       console.log(formatInspectReport(report))
+    }
+    // Soft-deprecation hint: seen on stderr only when the user invoked
+    // the legacy --inspect flag instead of `seedforge inspect`. Easy to
+    // suppress with --quiet for scripts that already pinned this form.
+    if (!options.quiet && wasInvokedAsLegacyInspect()) {
+      console.error(
+        '\nNote: `seedforge --inspect` is supported but `seedforge inspect` is preferred.',
+      )
     }
     return null
   }
@@ -352,8 +363,12 @@ export function createProgram(): Command {
     )
     .option('--strict-only', 'with --only, error instead of auto-including FK ancestors', false)
     .option(
+      '--no-auto',
+      'disable auto-discovery of schema sources when no flag is given (require explicit flags)',
+    )
+    .option(
       '--inspect',
-      'describe detected tables, constraints, and generation order — no data is produced',
+      'describe detected tables, constraints, and generation order — no data is produced (prefer `seedforge inspect`)',
       false,
     )
     .option('--verbose', 'verbose logging', false)
@@ -517,7 +532,20 @@ Examples:
 
       // ─── Prisma schema-file path ─────────────────────────────────
       let prismaPath = options.prisma
-      if (!prismaPath && !connectionUrl && !options.drizzle && !options.jpa && !options.typeorm) {
+      // Inline Prisma auto-detection only kicks in when the user has
+      // declared their output target (`--output` or `--dry-run`). Bare
+      // `seedforge` invocations fall through to the discovery
+      // suggestion list, so we never silently pick a parser when the
+      // user might have meant `--db` instead.
+      const userDeclaredOutputTarget = Boolean(options.output) || options.dryRun === true
+      if (
+        !prismaPath &&
+        !connectionUrl &&
+        !options.drizzle &&
+        !options.jpa &&
+        !options.typeorm &&
+        userDeclaredOutputTarget
+      ) {
         const autoPath = join(process.cwd(), 'prisma', 'schema.prisma')
         if (existsSync(autoPath)) {
           prismaPath = autoPath
@@ -632,20 +660,53 @@ Examples:
       }
 
       // ─── DB introspection path ───────────────────────────────────
-      if (!connectionUrl) {
-        throw new ConfigError('SF5017', 'No database connection URL provided', [
-          'Pass --db <url> on the command line',
-          'Or use --drizzle <path> to parse a Drizzle schema file',
-          'Or use --prisma <path> to parse a Prisma schema file',
-          'Or use --jpa <path> to parse JPA entity classes',
-          'Or use --typeorm <path> to parse TypeORM entity classes',
-          'Or set connection.url in .seedforge.yml',
-          'Or set DATABASE_URL environment variable and use ${DATABASE_URL} in config',
-        ])
+      let resolvedConnectionUrl = connectionUrl
+      if (!resolvedConnectionUrl) {
+        // Auto-discovery: walk cwd for schema sources and decide what
+        // to do. Rules (per PATHWAY.md Wave 1.5):
+        //   1. If DATABASE_URL is set in env, use it (live DB is the
+        //      high-fidelity default for the live-DB tier).
+        //   2. Otherwise, list every detected source and exit non-zero.
+        //   3. Never silently pick between sources of *different*
+        //      fidelity (live DB vs. parser).
+        // Disabled with --no-auto for users who want belt-and-suspenders.
+        const autoDiscoveryEnabled = options.auto !== false
+        if (autoDiscoveryEnabled) {
+          if (process.env.DATABASE_URL && process.env.DATABASE_URL.trim().length > 0) {
+            // Rule 1: use the env DB. No prompt — the user opted in by
+            // setting the env var.
+            resolvedConnectionUrl = process.env.DATABASE_URL
+            if (!options.quiet) {
+              console.log(
+                `seedforge: using DATABASE_URL from environment (${redactConnectionString(resolvedConnectionUrl)})`,
+              )
+            }
+          } else {
+            // Rule 2: list options and exit. We never auto-pick a
+            // parser when there's no live DB — the user chooses.
+            const discovery = discoverSources(process.cwd())
+            console.error(formatDiscoverySuggestion(discovery))
+            process.exit(64)
+          }
+        } else {
+          throw new ConfigError('SF5017', 'No database connection URL provided', [
+            'Pass --db <url> on the command line',
+            'Or use --drizzle <path> to parse a Drizzle schema file',
+            'Or use --prisma <path> to parse a Prisma schema file',
+            'Or use --jpa <path> to parse JPA entity classes',
+            'Or use --typeorm <path> to parse TypeORM entity classes',
+            'Or set connection.url in .seedforge.yml',
+            'Or set DATABASE_URL environment variable and use ${DATABASE_URL} in config',
+          ])
+        }
       }
 
+      // From here on, the connection URL is guaranteed to be present
+      // (either via flag/config or auto-discovered DATABASE_URL).
+      const finalConnectionUrl = resolvedConnectionUrl as string
+
       // Detect database type from connection URL scheme
-      const dbType = detectDatabaseType(connectionUrl)
+      const dbType = detectDatabaseType(finalConnectionUrl)
 
       // Validate --fast flag: PG uses COPY, MySQL uses LOAD DATA LOCAL INFILE,
       // SQLite has no streaming bulk-load protocol.
@@ -669,13 +730,13 @@ Examples:
       if (options.debug) {
         console.log('Options:', {
           ...options,
-          db: redactConnectionString(connectionUrl),
+          db: redactConnectionString(finalConnectionUrl),
         })
       }
 
       if (dbType === DatabaseType.SQLITE) {
         await handleSqlitePath(
-          connectionUrl,
+          finalConnectionUrl,
           options,
           effectiveCount,
           effectiveSeed,
@@ -684,7 +745,7 @@ Examples:
         )
       } else if (dbType === DatabaseType.MYSQL) {
         await handleMysqlPath(
-          connectionUrl,
+          finalConnectionUrl,
           options,
           effectiveSchema,
           effectiveCount,
@@ -695,7 +756,7 @@ Examples:
       } else {
         // PostgreSQL path
         await handlePostgresPath(
-          connectionUrl,
+          finalConnectionUrl,
           options,
           effectiveSchema,
           effectiveCount,
@@ -707,6 +768,39 @@ Examples:
     })
 
   return program
+}
+
+/**
+ * Was the user-facing form `seedforge --inspect` (legacy) or
+ * `seedforge inspect` (preferred)? Used to print a soft deprecation
+ * hint on the legacy form. Both eventually go through the same
+ * `--inspect` flag, so we sniff process.argv directly.
+ */
+function wasInvokedAsLegacyInspect(): boolean {
+  const argv = process.argv
+  if (argv.length < 3) return false
+  if (argv[2] === 'inspect') return false
+  return argv.includes('--inspect')
+}
+
+/**
+ * Rewrite `seedforge inspect [args...]` into `seedforge --inspect [args...]`
+ * before Commander parses it. This avoids defining duplicate options on a
+ * real subcommand (which Commander handles awkwardly when the parent owns
+ * the same flags) and keeps the inspect path identical to the root path.
+ *
+ * The shape `seedforge inspect ...` is the user-facing contract; internally
+ * we reuse the existing `--inspect` flow.
+ */
+export function rewriteInspectSubcommand(argv: string[]): string[] {
+  // Preserve argv[0] (node) and argv[1] (script). Look at argv[2] for
+  // the subcommand keyword.
+  if (argv.length < 3) return argv
+  if (argv[2] !== 'inspect') return argv
+  const rest = argv.slice(3)
+  // Drop a duplicate --inspect if the user happened to pass it.
+  const filtered = rest.filter((a) => a !== '--inspect')
+  return [argv[0], argv[1], '--inspect', '--yes', ...filtered]
 }
 
 // ─── Database-specific handlers ──────────────────────────────────────
@@ -1020,7 +1114,7 @@ async function main(): Promise<void> {
   const program = createProgram()
 
   try {
-    await program.parseAsync(process.argv)
+    await program.parseAsync(rewriteInspectSubcommand(process.argv))
   } catch (err) {
     if (err instanceof SeedForgeError) {
       console.error(err.render())

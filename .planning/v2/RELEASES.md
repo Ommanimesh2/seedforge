@@ -13,6 +13,7 @@ v2 transforms seedforge from a CLI-only tool into a **full-stack test data platf
 | **v2.4.0** | `mirror` | Production Data Subset + Anonymize | Minor — new subsystem |
 | **v2.5.0** | `scope`  | `--only` selective seeding + `--inspect` | Minor — CLI surface |
 | **v2.6.0** | `stream` | Fused `--fast` streaming (PG COPY + MySQL LOAD DATA) | Minor — scale/perf |
+| **v2.7.0** | `trust`  | CHECK enums, JPA real-world, `seedforge inspect`, auto-discovery, README | Minor — Wave 1 of `PATHWAY.md` |
 
 ---
 

@@ -6,7 +6,7 @@ import { queryTables } from '../queries/tables.js'
 import { queryPrimaryKeys } from '../queries/primary-keys.js'
 import { queryForeignKeys } from '../queries/foreign-keys.js'
 import { queryUniqueConstraints, queryIndexes } from '../queries/unique-indexes.js'
-import { queryCheckConstraints } from '../queries/check-constraints.js'
+import { queryCheckConstraints, extractEnumLikeValues } from '../queries/check-constraints.js'
 import { queryEnums } from '../queries/enums.js'
 import { parseArray } from '../queries/parse-array.js'
 
@@ -414,6 +414,79 @@ describe('queryCheckConstraints', () => {
     const checks = await queryCheckConstraints(client as unknown as pg.Client, 'public')
 
     expect(checks.size).toBe(0)
+  })
+})
+
+// Real-world Postgres outputs from `pg_get_constraintdef`. These are the
+// shapes the regression in v2.7.0 was about: prior versions returned null
+// because the regex didn't tolerate cast wrappers around the array.
+describe('extractEnumLikeValues — real-world dialect forms', () => {
+  it('handles ANY ((ARRAY[...])::text[]) — Postgres cast-wrapped form', () => {
+    const expr =
+      "(((order_type)::text = ANY ((ARRAY['PURCHASE'::character varying, 'REDEMPTION'::character varying, 'IR'::character varying, 'SIP_INSTALLMENT'::character varying, 'SWITCH'::character varying])::text[])))"
+    expect(extractEnumLikeValues(expr)).toEqual([
+      'PURCHASE',
+      'REDEMPTION',
+      'IR',
+      'SIP_INSTALLMENT',
+      'SWITCH',
+    ])
+  })
+
+  it('handles nullable ANY-with-IS-NULL guard', () => {
+    const expr =
+      "((order_sub_type IS NULL) OR ((order_sub_type)::text = ANY ((ARRAY['FRESH'::character varying, 'ADDITIONAL'::character varying, 'FULL_REDEMPTION'::character varying, 'PARTIAL'::character varying, 'INSTANT'::character varying, 'CP'::character varying, 'RECURRING'::character varying])::text[]))) "
+    expect(extractEnumLikeValues(expr)).toEqual([
+      'FRESH',
+      'ADDITIONAL',
+      'FULL_REDEMPTION',
+      'PARTIAL',
+      'INSTANT',
+      'CP',
+      'RECURRING',
+    ])
+  })
+
+  it('handles plain IN list', () => {
+    expect(extractEnumLikeValues("(status IN ('active', 'inactive', 'pending'))")).toEqual([
+      'active',
+      'inactive',
+      'pending',
+    ])
+  })
+
+  it('handles IN with cast suffix on each value', () => {
+    expect(
+      extractEnumLikeValues("((kind)::text IN ('A'::character varying, 'B'::character varying))"),
+    ).toEqual(['A', 'B'])
+  })
+
+  it('handles OR chain', () => {
+    expect(extractEnumLikeValues("((kind = 'A') OR (kind = 'B') OR (kind = 'C'))")).toEqual([
+      'A',
+      'B',
+      'C',
+    ])
+  })
+
+  it('handles values with embedded apostrophes via double-single-quote escape', () => {
+    const expr = "((label)::text = ANY (ARRAY['it''s ok'::text, 'plain'::text]))"
+    expect(extractEnumLikeValues(expr)).toEqual(["it's ok", 'plain'])
+  })
+
+  it('returns null for range checks (not enum-like)', () => {
+    expect(extractEnumLikeValues('(age > 0)')).toBeNull()
+    expect(extractEnumLikeValues('((amount >= 0) AND (amount <= 1000))')).toBeNull()
+  })
+
+  it('returns null for IN with non-literal arguments', () => {
+    // Should not be treated as an enum.
+    expect(extractEnumLikeValues('(month IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12))')).toBeNull()
+  })
+
+  it('returns null for empty / undefined input', () => {
+    expect(extractEnumLikeValues('')).toBeNull()
+    expect(extractEnumLikeValues(undefined as unknown as string)).toBeNull()
   })
 })
 

@@ -471,6 +471,43 @@ public enum Size { SMALL, MEDIUM, LARGE }
     expect(enums[1].name).toBe('Size')
   })
 
+  it('parses enums with constructor args and methods (real-world DDD)', () => {
+    // Real shape from Curie's NavSource — constants take ints, then a
+    // private constructor + accessor follows. The previous regex
+    // `[^}]*` stopped at the constructor's closing brace, missing
+    // most of the body and dropping all values.
+    const enums = parseJavaEnums(`
+@Getter
+public enum NavSource {
+    AMC_FEED(3),   // Direct from AMC
+    AMFI(2),       // From AMFI website
+    BACKFILL(1),   // Historical data load
+    MANUAL(1);     // Manual correction
+
+    private final int priority;
+
+    NavSource(int priority) {
+        this.priority = priority;
+    }
+}
+`)
+    expect(enums).toHaveLength(1)
+    expect(enums[0].name).toBe('NavSource')
+    expect(enums[0].values).toEqual(['AMC_FEED', 'AMFI', 'BACKFILL', 'MANUAL'])
+  })
+
+  it('strips line comments between enum constants', () => {
+    const enums = parseJavaEnums(`
+enum Kind {
+    /* leading block comment */
+    ALPHA, // first
+    BETA,  // second
+    GAMMA  // third
+}
+`)
+    expect(enums[0].values).toEqual(['ALPHA', 'BETA', 'GAMMA'])
+  })
+
   it('applies @Enumerated with @Column(nullable = false)', () => {
     const source = `
 public enum UserRole { ADMIN, USER }
@@ -850,11 +887,11 @@ public class Order {
     expect(table.columns.has('items')).toBe(false)
 
     expect(table.foreignKeys.length).toBe(2)
-    const customerFk = table.foreignKeys.find(fk => fk.columns[0] === 'customer_id')
+    const customerFk = table.foreignKeys.find((fk) => fk.columns[0] === 'customer_id')
     expect(customerFk).toBeDefined()
     expect(customerFk!.referencedTable).toBe('customer')
 
-    const addressFk = table.foreignKeys.find(fk => fk.columns[0] === 'shipping_address_id')
+    const addressFk = table.foreignKeys.find((fk) => fk.columns[0] === 'shipping_address_id')
     expect(addressFk).toBeDefined()
     expect(addressFk!.referencedTable).toBe('address')
   })

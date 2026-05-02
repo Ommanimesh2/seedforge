@@ -14,26 +14,26 @@ import { NormalizedType, FKAction } from '../../types/schema.js'
 // ─── Java type → NormalizedType mapping ───────────────────────────────────────
 
 const JAVA_TYPE_MAP: Record<string, NormalizedType> = {
-  'String': NormalizedType.VARCHAR,
-  'Integer': NormalizedType.INTEGER,
-  'int': NormalizedType.INTEGER,
-  'Long': NormalizedType.BIGINT,
-  'long': NormalizedType.BIGINT,
-  'Short': NormalizedType.SMALLINT,
-  'short': NormalizedType.SMALLINT,
-  'Double': NormalizedType.DOUBLE,
-  'double': NormalizedType.DOUBLE,
-  'Float': NormalizedType.REAL,
-  'float': NormalizedType.REAL,
-  'BigDecimal': NormalizedType.DECIMAL,
-  'Boolean': NormalizedType.BOOLEAN,
-  'boolean': NormalizedType.BOOLEAN,
-  'LocalDateTime': NormalizedType.TIMESTAMPTZ,
-  'Instant': NormalizedType.TIMESTAMPTZ,
-  'ZonedDateTime': NormalizedType.TIMESTAMPTZ,
-  'LocalDate': NormalizedType.DATE,
-  'LocalTime': NormalizedType.TIME,
-  'UUID': NormalizedType.UUID,
+  String: NormalizedType.VARCHAR,
+  Integer: NormalizedType.INTEGER,
+  int: NormalizedType.INTEGER,
+  Long: NormalizedType.BIGINT,
+  long: NormalizedType.BIGINT,
+  Short: NormalizedType.SMALLINT,
+  short: NormalizedType.SMALLINT,
+  Double: NormalizedType.DOUBLE,
+  double: NormalizedType.DOUBLE,
+  Float: NormalizedType.REAL,
+  float: NormalizedType.REAL,
+  BigDecimal: NormalizedType.DECIMAL,
+  Boolean: NormalizedType.BOOLEAN,
+  boolean: NormalizedType.BOOLEAN,
+  LocalDateTime: NormalizedType.TIMESTAMPTZ,
+  Instant: NormalizedType.TIMESTAMPTZ,
+  ZonedDateTime: NormalizedType.TIMESTAMPTZ,
+  LocalDate: NormalizedType.DATE,
+  LocalTime: NormalizedType.TIME,
+  UUID: NormalizedType.UUID,
   'byte[]': NormalizedType.BYTEA,
 }
 
@@ -55,9 +55,7 @@ function classToTableName(className: string): string {
 /** Extract annotation attribute value: e.g. from `name = "users"` → `"users"` */
 function extractAttr(annotationBody: string, attr: string): string | null {
   // Match attribute = "value" or attribute = value
-  const re = new RegExp(
-    `${attr}\\s*=\\s*(?:"([^"]*)"|(\\w+(?:\\.\\w+)*))`,
-  )
+  const re = new RegExp(`${attr}\\s*=\\s*(?:"([^"]*)"|(\\w+(?:\\.\\w+)*))`)
   const m = annotationBody.match(re)
   if (!m) return null
   return m[1] ?? m[2] ?? null
@@ -120,27 +118,81 @@ interface ParsedJavaEnum {
   values: string[]
 }
 
-/** Parse Java enum declarations from source code */
+/** Parse Java enum declarations from source code. Handles enums with
+ *  constructors and methods (`AMC_FEED(3), AMFI(2);  private final int p; ...`)
+ *  by walking braces to capture the full body. */
 export function parseJavaEnums(source: string): ParsedJavaEnum[] {
   const enums: ParsedJavaEnum[] = []
-  // Match: public enum Name { VAL1, VAL2, ... }
-  // Also handle: enum Name { VAL1, VAL2; ... }
-  const enumRe = /(?:public\s+)?enum\s+(\w+)\s*\{([^}]*)\}/g
+  const headerRe = /(?:public\s+)?enum\s+(\w+)\s*\{/g
   let m: RegExpExecArray | null
-  while ((m = enumRe.exec(source)) !== null) {
+  while ((m = headerRe.exec(source)) !== null) {
     const name = m[1]
-    const body = m[2]
-    // Enum constants are before the first semicolon (if any) or the whole body
+    const bodyStart = m.index + m[0].length
+    // Walk balanced braces to find the matching `}`.
+    let depth = 1
+    let i = bodyStart
+    while (i < source.length && depth > 0) {
+      const ch = source[i]
+      if (ch === '{') depth++
+      else if (ch === '}') depth--
+      else if (ch === '/' && source[i + 1] === '/') {
+        // Skip line comment
+        while (i < source.length && source[i] !== '\n') i++
+      } else if (ch === '/' && source[i + 1] === '*') {
+        // Skip block comment
+        i += 2
+        while (i < source.length - 1 && !(source[i] === '*' && source[i + 1] === '/')) i++
+        i += 2
+        continue
+      }
+      i++
+    }
+    if (depth !== 0) continue
+    const body = source.slice(bodyStart, i - 1)
+
+    // Enum constants are before the first semicolon (if any) or the whole body.
     const constantsPart = body.split(';')[0]
-    const values = constantsPart
-      .split(',')
-      .map(v => v.trim())
-      .filter(v => v.length > 0 && /^[A-Z_][A-Z0-9_]*$/i.test(v))
+    // Strip out parenthesized argument lists (`AMC_FEED(3)` → `AMC_FEED`)
+    // and inline comments. Done with a balanced-paren walk over each
+    // comma-separated chunk so that nested commas in args don't split.
+    const values: string[] = []
+    let buf = ''
+    let depthP = 0
+    for (let k = 0; k < constantsPart.length; k++) {
+      const c = constantsPart[k]
+      if (c === '(') {
+        depthP++
+        continue
+      }
+      if (c === ')') {
+        depthP--
+        continue
+      }
+      if (depthP > 0) continue
+      if (c === ',') {
+        const v = stripCommentsAndAnnotations(buf).trim()
+        if (v && /^[A-Z_][A-Z0-9_]*$/i.test(v)) values.push(v)
+        buf = ''
+        continue
+      }
+      buf += c
+    }
+    const last = stripCommentsAndAnnotations(buf).trim()
+    if (last && /^[A-Z_][A-Z0-9_]*$/i.test(last)) values.push(last)
+
     if (values.length > 0) {
       enums.push({ name, values })
     }
   }
   return enums
+}
+
+function stripCommentsAndAnnotations(s: string): string {
+  return s
+    .replace(/\/\/.*$/gm, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/@\w+(?:\([^)]*\))?/g, '')
+    .trim()
 }
 
 /** Scan a directory for Java enum files and parse them */
@@ -161,6 +213,55 @@ export function scanForEnums(directory: string): Map<string, ParsedJavaEnum> {
   return enumMap
 }
 
+/**
+ * Walk upward from `entityDir` looking for the Java source root.
+ * Real-world DDD codebases keep enum value-objects in a sibling
+ * package (e.g. `commons/valueobject/`), so scanning only the entity
+ * directory misses them.
+ *
+ * Strategies, in order:
+ *   1. Look for `src/main/java` in the path (Maven/Gradle layout).
+ *   2. Walk up looking for a project marker (`pom.xml`, `build.gradle`,
+ *      `build.gradle.kts`, `settings.gradle`).
+ *   3. Fall back to two directories above `entityDir`.
+ *
+ * Returns null only if even (3) goes above the filesystem root.
+ */
+export function findJavaSourceRoot(entityDir: string): string | null {
+  // Strategy 1: src/main/java anywhere in the path.
+  const srcMainJava = entityDir.indexOf(`${'/'}src${'/'}main${'/'}java`)
+  if (srcMainJava >= 0) {
+    return entityDir.slice(0, srcMainJava + `${'/'}src${'/'}main${'/'}java`.length)
+  }
+
+  // Strategy 2: walk up looking for project marker files.
+  const markers = ['pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle']
+  let cur = entityDir
+  for (let i = 0; i < 12; i++) {
+    for (const marker of markers) {
+      try {
+        if (statSync(join(cur, marker)).isFile()) {
+          return cur
+        }
+      } catch {
+        // not present — keep looking
+      }
+    }
+    const parent = dirname(cur)
+    if (parent === cur) break
+    cur = parent
+  }
+
+  // Strategy 3: two levels up (sibling-package convention).
+  cur = entityDir
+  for (let i = 0; i < 2; i++) {
+    const parent = dirname(cur)
+    if (parent === cur) return null
+    cur = parent
+  }
+  return cur
+}
+
 // ─── Entity field parsing ────────────────────────────────────────────────────
 
 interface ParsedField {
@@ -175,6 +276,8 @@ interface ParsedEntity {
   fields: ParsedField[]
   sourceDir: string
   rawSource: string
+  /** Name of superclass if `class X extends Y` was present. */
+  extendsName: string | null
 }
 
 /** Parse a single Java entity class from source text */
@@ -182,22 +285,15 @@ export function parseEntityClass(source: string, sourceDir: string): ParsedEntit
   // Check for @Entity annotation
   if (!/@Entity\b/.test(source)) return null
 
-  // Extract class-level annotations and class name
-  // Match annotations before class declaration
-  const classRe = /((?:\s*@\w+(?:\s*\([^)]*\))?\s*)*)\s*(?:public\s+)?class\s+(\w+)/s
-  const classMatch = source.match(classRe)
-  if (!classMatch) return null
+  // Walk forward collecting class-level annotations until we hit the
+  // `class` keyword. Uses balanced-paren scanning so annotations like
+  // @Table(name="x", uniqueConstraints={@UniqueConstraint(...)}) are
+  // captured correctly.
+  const located = locateClassDeclaration(source)
+  if (!located) return null
+  const { className, extendsName, classAnnotations, classBodyStart } = located
 
-  const classAnnotations = classMatch[1]
-  const className = classMatch[2]
-
-  // Extract the class body (between the first { after class declaration and the matching })
-  const classStart = source.indexOf('{', classMatch.index! + classMatch[0].length)
-  if (classStart === -1) return null
-
-  const classBody = extractClassBody(source, classStart)
-
-  // Parse fields from the class body
+  const classBody = extractClassBody(source, classBodyStart)
   const fields = parseFields(classBody)
 
   return {
@@ -206,7 +302,107 @@ export function parseEntityClass(source: string, sourceDir: string): ParsedEntit
     fields,
     sourceDir,
     rawSource: source,
+    extendsName,
   }
+}
+
+/**
+ * Walk through `source` from the first `package`/`import`-skipping
+ * cursor, eat each `@Annotation(...)` block (with balanced parens),
+ * then read the `[abstract] class Name [extends Y]` declaration and
+ * return everything up to the opening `{`.
+ */
+function locateClassDeclaration(source: string): {
+  className: string
+  extendsName: string | null
+  classAnnotations: string
+  classBodyStart: number
+} | null {
+  // Class declaration with optional `extends X` and optional
+  // `implements A, B, C` (Java entities frequently `extends BaseEntity
+  // implements AggregateRoot`).
+  const classRe =
+    /\b(?:public\s+)?(?:abstract\s+)?class\s+(\w+)(?:\s+extends\s+(\w+))?(?:\s+implements\s+[\w,\s.]+?)?\s*\{/
+  const m = classRe.exec(source)
+  if (!m) return null
+  const className = m[1]
+  const extendsName = m[2] ?? null
+  const classBodyStart = m.index + m[0].length - 1 // position of `{`
+
+  // Walk back from m.index, collecting annotation blocks in order.
+  // We iterate forward from 0, recognizing each `@Name(...)` chunk
+  // until we reach `m.index`. Anything before the first `@` (package/
+  // imports) is ignored.
+  const annotations: string[] = []
+  let i = 0
+  while (i < m.index) {
+    // Skip non-annotation chars.
+    while (i < m.index && source[i] !== '@') i++
+    if (i >= m.index) break
+    // Found an `@`. Read annotation name.
+    const annStart = i
+    i++ // past @
+    while (i < m.index && /\w/.test(source[i])) i++
+    // Optional balanced parenthesized body.
+    while (i < m.index && /\s/.test(source[i])) i++
+    if (i < m.index && source[i] === '(') {
+      let depth = 1
+      i++ // past (
+      while (i < source.length && depth > 0) {
+        const ch = source[i]
+        if (ch === '(') depth++
+        else if (ch === ')') depth--
+        i++
+      }
+    }
+    annotations.push(source.slice(annStart, i))
+  }
+
+  return {
+    className,
+    extendsName,
+    classAnnotations: annotations.join(' '),
+    classBodyStart,
+  }
+}
+
+/**
+ * Parse a @MappedSuperclass class — same shape as an entity, no @Entity
+ * annotation required. Returns its declared fields so subclasses can
+ * inherit them.
+ */
+export function parseMappedSuperclass(source: string): ParsedEntity | null {
+  if (!/@MappedSuperclass\b/.test(source)) return null
+  const located = locateClassDeclaration(source)
+  if (!located) return null
+
+  const { className, extendsName, classAnnotations, classBodyStart } = located
+  const classBody = extractClassBody(source, classBodyStart)
+  const fields = parseFields(classBody)
+
+  return {
+    className,
+    classAnnotations,
+    fields,
+    sourceDir: '',
+    rawSource: source,
+    extendsName,
+  }
+}
+
+/** Scan a directory tree for @MappedSuperclass declarations */
+export function scanForMappedSuperclasses(directory: string): Map<string, ParsedEntity> {
+  const out = new Map<string, ParsedEntity>()
+  try {
+    for (const file of scanJavaFiles(directory)) {
+      const source = readFileSync(file, 'utf-8')
+      const sup = parseMappedSuperclass(source)
+      if (sup) out.set(sup.className, sup)
+    }
+  } catch {
+    // ignore
+  }
+  return out
 }
 
 /** Extract class body handling brace nesting */
@@ -249,8 +445,9 @@ function parseFields(classBody: string): ParsedField[] {
       // Found an annotation
       const annStart = pos
       pos++ // skip '@'
-      // Read annotation name
-      while (pos < trimmed.length && /\w/.test(trimmed[pos])) pos++
+      // Read annotation name (allowing dotted nested forms like
+      // `@EqualsAndHashCode.Include` from Lombok).
+      while (pos < trimmed.length && /[\w.]/.test(trimmed[pos])) pos++
       // Skip whitespace before potential parens
       while (pos < trimmed.length && /\s/.test(trimmed[pos])) pos++
       // If '(' follows, consume the balanced paren group
@@ -326,6 +523,65 @@ function splitStatements(body: string): string[] {
 interface JpaParseOptions {
   /** Default schema name for all tables */
   schemaName?: string
+  /**
+   * If true, skip ID-based FK inference (e.g. for codebases that
+   * deliberately store loose UUID references that aren't FKs).
+   */
+  disableIdFkInference?: boolean
+  /** If true, do not emit `console.warn` for skipped entities. */
+  suppressWarnings?: boolean
+}
+
+/**
+ * For each table, find columns matching `<base>_id` whose type is UUID
+ * or BIGINT and whose target table exists in `tables`. Add an inferred
+ * FK if one isn't already declared.
+ *
+ * Matching strategy:
+ *   - `amc_id`  → `amc` exact, then `amcs` plural
+ *   - `user_id` → `user` exact, then `users` plural
+ *   - skips if the FK already exists for the same (column, target)
+ *   - skips ambiguous matches (multiple plausible targets)
+ */
+export function inferIdBasedForeignKeys(tables: Map<string, TableDef>, schemaName: string): void {
+  const tableNames = new Set(tables.keys())
+
+  for (const [tableName, table] of tables) {
+    for (const [columnName, column] of table.columns) {
+      // Only UUID / BIGINT / INTEGER columns ending in _id are candidates.
+      if (!columnName.endsWith('_id')) continue
+      if (
+        column.dataType !== NormalizedType.UUID &&
+        column.dataType !== NormalizedType.BIGINT &&
+        column.dataType !== NormalizedType.INTEGER
+      ) {
+        continue
+      }
+      // Don't shadow an existing FK on this column.
+      const alreadyHasFk = table.foreignKeys.some((fk) => fk.columns.includes(columnName))
+      if (alreadyHasFk) continue
+
+      const base = columnName.slice(0, -'_id'.length) // strip _id
+      // Try singular first, then naive plural (`amc` → `amcs`),
+      // then `(base)es` (`scheme` → `schemes`).
+      const candidates = [base, `${base}s`, `${base}es`]
+      const target = candidates.find((c) => tableNames.has(c) && c !== tableName)
+      if (!target) continue
+
+      table.foreignKeys.push({
+        name: `fk_inferred_${tableName}_${columnName}`,
+        columns: [columnName],
+        referencedTable: target,
+        referencedSchema: schemaName,
+        referencedColumns: ['id'],
+        onDelete: FKAction.NO_ACTION,
+        onUpdate: FKAction.NO_ACTION,
+        isDeferrable: false,
+        isDeferred: false,
+        isVirtual: true, // marker: this FK was inferred, not declared
+      })
+    }
+  }
 }
 
 /** Convert a parsed entity into a TableDef */
@@ -366,13 +622,7 @@ function entityToTableDef(
 
     // Handle @ManyToMany + @JoinTable
     if (hasAnnotation(annotations, 'ManyToMany')) {
-      const joinTable = parseManyToMany(
-        annotations,
-        fieldName,
-        tableName,
-        javaType,
-        schemaName,
-      )
+      const joinTable = parseManyToMany(annotations, fieldName, tableName, javaType, schemaName)
       if (joinTable) {
         joinTables.push(joinTable)
       }
@@ -380,17 +630,11 @@ function entityToTableDef(
     }
 
     // Handle @ManyToOne / @OneToOne with @JoinColumn
-    const isRelation = hasAnnotation(annotations, 'ManyToOne') ||
-      hasAnnotation(annotations, 'OneToOne')
+    const isRelation =
+      hasAnnotation(annotations, 'ManyToOne') || hasAnnotation(annotations, 'OneToOne')
 
     if (isRelation) {
-      const fkResult = parseRelationField(
-        annotations,
-        fieldName,
-        javaType,
-        tableName,
-        schemaName,
-      )
+      const fkResult = parseRelationField(annotations, fieldName, javaType, tableName, schemaName)
       if (fkResult) {
         columns.set(fkResult.column.name, fkResult.column)
         foreignKeys.push(fkResult.fk)
@@ -480,7 +724,9 @@ function entityToTableDef(
         const strategy = extractAttr(genBody, 'strategy')
         if (
           strategy &&
-          (strategy.includes('IDENTITY') || strategy.includes('AUTO') || strategy.includes('SEQUENCE'))
+          (strategy.includes('IDENTITY') ||
+            strategy.includes('AUTO') ||
+            strategy.includes('SEQUENCE'))
         ) {
           isAutoIncrement = true
         }
@@ -493,7 +739,8 @@ function entityToTableDef(
     // Check for timestamp annotations
     let hasDefault = false
     let defaultValue: string | null = null
-    const isGenerated = hasAnnotation(annotations, 'CreationTimestamp') ||
+    const isGenerated =
+      hasAnnotation(annotations, 'CreationTimestamp') ||
       hasAnnotation(annotations, 'UpdateTimestamp')
     if (isGenerated) {
       hasDefault = true
@@ -802,6 +1049,7 @@ export function parseJavaFile(
   filePath: string,
   enumMap: Map<string, ParsedJavaEnum>,
   options: JpaParseOptions = {},
+  mappedSuperclasses?: Map<string, ParsedEntity>,
 ): { table: TableDef; enums: EnumDef[]; joinTables: TableDef[] } | null {
   const source = readFileSync(filePath, 'utf-8')
 
@@ -814,7 +1062,41 @@ export function parseJavaFile(
   const entity = parseEntityClass(source, dirname(filePath))
   if (!entity) return null
 
+  if (mappedSuperclasses) {
+    inheritMappedSuperclassFields(entity, mappedSuperclasses)
+  }
+
   return entityToTableDef(entity, enumMap, options)
+}
+
+/**
+ * If `entity extends X` and X is a known @MappedSuperclass, prepend X's
+ * fields to the entity's field list. Walks the chain so X-extends-Y
+ * inherits Y's fields too. Subclass-declared fields take precedence
+ * (same column name = subclass wins).
+ */
+function inheritMappedSuperclassFields(
+  entity: ParsedEntity,
+  mappedSuperclasses: Map<string, ParsedEntity>,
+): void {
+  const inherited: ParsedField[] = []
+  let parentName = entity.extendsName
+  const seen = new Set<string>()
+  while (parentName && !seen.has(parentName)) {
+    seen.add(parentName)
+    const parent = mappedSuperclasses.get(parentName)
+    if (!parent) break
+    // Prepend so root-most ancestor's fields come first; later passes
+    // override by name as needed.
+    inherited.unshift(...parent.fields)
+    parentName = parent.extendsName
+  }
+  if (inherited.length === 0) return
+  // Subclass fields override inherited fields with the same Java field
+  // name (rare but legal).
+  const subclassNames = new Set(entity.fields.map((f) => f.name))
+  const filtered = inherited.filter((f) => !subclassNames.has(f.name))
+  entity.fields = [...filtered, ...entity.fields]
 }
 
 /** Parse a single Java source string (for testing / programmatic use) */
@@ -844,22 +1126,46 @@ export function parseJpaDirectory(
 ): DatabaseSchema {
   const schemaName = options.schemaName ?? 'public'
 
-  // First pass: scan all enums in the directory
+  // First pass: scan all enums. Look in the entity directory itself, but
+  // also look up the tree to the Java source root so value-object enums
+  // declared in sibling packages (a DDD convention) are picked up.
   const enumMap = scanForEnums(directory)
+  const sourceRoot = findJavaSourceRoot(directory)
+  if (sourceRoot && sourceRoot !== directory) {
+    const wider = scanForEnums(sourceRoot)
+    for (const [name, value] of wider) {
+      // Don't overwrite enums already found in the more specific scan.
+      if (!enumMap.has(name)) enumMap.set(name, value)
+    }
+  }
 
-  // Second pass: scan for entity files
+  // Second pass: scan @MappedSuperclass declarations from the source
+  // root so subclass entities can inherit @Id / timestamp fields.
+  const mappedSuperclasses = sourceRoot
+    ? scanForMappedSuperclasses(sourceRoot)
+    : scanForMappedSuperclasses(directory)
+
+  // Third pass: scan for entity files
   const javaFiles = scanJavaFiles(directory)
   const entityFiles = javaFiles.filter((f) => {
     const content = readFileSync(f, 'utf-8')
-    return /@Entity\b/.test(content)
+    return /@Entity\b/.test(content) && !/@MappedSuperclass\b/.test(content)
   })
 
   const tables = new Map<string, TableDef>()
   const enums = new Map<string, EnumDef>()
+  const skipped: { file: string; reason: string }[] = []
 
   for (const file of entityFiles) {
-    const result = parseJavaFile(file, enumMap, options)
-    if (!result) continue
+    const result = parseJavaFile(file, enumMap, options, mappedSuperclasses)
+    if (!result) {
+      skipped.push({ file, reason: 'no @Entity class declaration found' })
+      continue
+    }
+    if (!result.table.primaryKey) {
+      skipped.push({ file, reason: 'no @Id annotation found on any field' })
+      continue
+    }
 
     tables.set(result.table.name, result.table)
 
@@ -869,6 +1175,21 @@ export function parseJpaDirectory(
 
     for (const joinTable of result.joinTables) {
       tables.set(joinTable.name, joinTable)
+    }
+  }
+
+  // Third pass: ID-based FK inference for DDD-style entities that store
+  // references as raw UUID/Long fields without @ManyToOne. For each
+  // column matching `<base>_id`, look up an entity whose table name
+  // matches `<base>` (singular or plural) and infer the FK if one
+  // doesn't already exist.
+  if (!options.disableIdFkInference) {
+    inferIdBasedForeignKeys(tables, schemaName)
+  }
+
+  if (skipped.length > 0 && !options.suppressWarnings) {
+    for (const { file, reason } of skipped) {
+      console.warn(`WARNING [SF2010]: skipped JPA entity ${file}: ${reason}`)
     }
   }
 

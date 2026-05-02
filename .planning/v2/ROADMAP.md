@@ -4,6 +4,11 @@
 
 v2 expands seedforge from a PostgreSQL-only CLI to a multi-database, multi-input tool with smarter column detection, scale performance, and a plugin system for community parsers.
 
+> **Near-term execution order is in `PATHWAY.md`.** This file is the
+> canonical list of all phases; PATHWAY.md is the prioritized
+> ship-order synthesized from external positioning reviews. Where the
+> two disagree, PATHWAY.md wins for what ships next.
+
 ---
 
 ## Phase 1: Semantic Column Matching (Stem Scorer)
@@ -169,6 +174,21 @@ v2 expands seedforge from a PostgreSQL-only CLI to a multi-database, multi-input
 - [x] 1M rows feasible on standard hardware
 - [x] MySQL LOAD DATA LOCAL INFILE path for `--fast` (parity with PG COPY)
 - [x] Benchmark suite under `bench/` with PG + MySQL testcontainers
+
+---
+
+## Phase 11: Reversible Seeding (`--clean`)
+**Goal:** Undo a seedforge run without `TRUNCATE` so pre-existing rows survive.
+
+- Per-run tracking of inserted rows (in-DB tracking table or sidecar manifest)
+- `seedforge --clean` / `--clean <run_id>` / `--clean --all`
+- `seedforge --runs` to list prior runs
+- Reverse-FK-order deletion; `--cascade` for external FK collisions
+- Spec: `.planning/v2/v2.7.0-clean.md` (full design; PATHWAY schedules
+  the MVP for v2.8.0 and follow-up hardening for v2.8.x)
+
+**Status:** Drafted. Scheduled by `PATHWAY.md` for v2.8.x, starting
+with an MVP in v2.8.0.
 
 ---
 

@@ -1,10 +1,29 @@
 # seedforge
 
-**Generate realistic seed data from your database schema. Zero config required.**
+> **Stop maintaining brittle seed scripts. seedforge reads your schema and generates valid relational test data automatically.**
 
-Point seedforge at any database -- PostgreSQL, MySQL, or SQLite -- and it produces INSERT statements with data that actually looks real. Names in name columns, emails in email columns, prices in price columns. It reads your schema, resolves foreign keys, and just works.
+The zero-config `npx` seed tool for developers who need realistic, relational test data from their actual schema. Point it at any PostgreSQL, MySQL, or SQLite database — or hand it your Prisma / Drizzle / TypeORM / JPA schema — and it produces deterministic, FK-correct seed data in seconds.
 
-Works with live databases and ORM schema files (Prisma, Drizzle, TypeORM, JPA). Use it from the CLI or import the programmatic API into your tests.
+```bash
+npx @otg-dev/seedforge --db $DATABASE_URL --count 100 --seed 42
+```
+
+That's the whole interface. No config file, no decorators, no schema definitions. seedforge introspects what you have and fills it in.
+
+<!--
+The block below is tagged `seedforge-test` so the e2e snippet runner
+exercises it. `$DATABASE_URL` is replaced with a temp SQLite path at
+test time — for real usage, point it at any of the supported databases.
+-->
+```bash seedforge-test
+seedforge --db "$DATABASE_URL" --count 5 --seed 42 --quiet --yes
+```
+
+### Why
+
+- **Schema-aware.** Reads tables, FKs, enums, CHECK constraints from the source of truth — not a copy of it.
+- **Zero-config.** Works on day one against any supported database or ORM. No setup beyond pointing at your schema.
+- **Deterministic.** Pass `--seed 42` and get byte-identical output across machines and CI runs. Faker can't promise this; hand-written fixtures rot.
 
 ## Quick Demo
 
@@ -96,6 +115,36 @@ seedforge --db postgres://localhost/mydb --count 10000 --fast
 # Use a config file for fine-grained control
 seedforge --config .seedforge.yml
 ```
+
+### When to use `--db` vs. a parser flag
+
+seedforge supports two workflows. Pick based on what you need:
+
+| Path | Use when | Tradeoff |
+|---|---|---|
+| `--db <url>` (live DB) | You want **insertion fidelity** — sequences, defaults, triggers, extensions all behave like production. | Requires a running database and credentials. |
+| `--prisma` / `--drizzle` / `--typeorm` / `--jpa` | You want **portability and reproducibility** — generate seed SQL once, replay forever, no live DB needed. CI artifacts, PR preview, offline dev. | Function-based defaults (`now()`, `gen_random_uuid()`) and triggers won't fire until you apply. |
+
+For other ORMs (GORM, SQLAlchemy, Django, ActiveRecord, EF Core, Sequelize, …): connect to a live DB via `--db` after running your migrations. Native parsers for these ecosystems are not on the roadmap; community plugins are the planned path.
+
+### Auto-discovery
+
+Run `seedforge` with no flags from your project root and it walks the cwd looking for schema sources, prints what it found, and asks you to pick:
+
+```
+$ seedforge
+seedforge: no schema source specified.
+
+Detected schema sources in this project:
+  • Live DB:  postgres://***@localhost:5432/myapp_dev — from .env
+  • Prisma:   prisma/schema.prisma
+
+Run one of:
+  seedforge --db "postgres://localhost:5432/myapp_dev"
+  seedforge --prisma prisma/schema.prisma
+```
+
+If `DATABASE_URL` is set in env, that wins automatically. Otherwise you choose — seedforge never silently picks between sources of different fidelity. Disable with `--no-auto`.
 
 ### Programmatic API
 
@@ -386,6 +435,17 @@ export default plugin
 ```bash
 seedforge --plugin ./my-parser-plugin.ts --output seed.sql
 ```
+
+## How seedforge compares
+
+| | Schema-aware | Zero-config | Deterministic | FK graph | Cross-DB |
+|---|:---:|:---:|:---:|:---:|:---:|
+| **seedforge** | yes | yes | yes (`--seed`) | yes | PG / MySQL / SQLite |
+| `@faker-js/faker` | no — field-level only | no — you write the schema | no | no — single field at a time | n/a |
+| Mockaroo | manual UI/API setup | no | no | partial | export to SQL |
+| Hand-rolled SQL seed scripts | drifts with migrations | no | yes (until schema changes) | manual | per-DB hand-written |
+
+seedforge sits between Faker (great primitive, no schema awareness) and platforms like Tonic / Gretel (powerful but enterprise-scale). The wedge: zero-config relational seeding from real schemas, deterministic by default.
 
 ## Contributing
 

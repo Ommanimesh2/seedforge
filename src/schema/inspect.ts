@@ -43,6 +43,17 @@ export interface InspectCheckConstraint {
   inferredValues: string[] | null
 }
 
+export type InspectCompatibility = 'ok' | 'risky' | 'blocked'
+
+export interface InspectCompatibilityReason {
+  /** Stable code consumers can switch on, e.g. `MISSING_PK`, `UNKNOWN_TYPE`. */
+  code: string
+  /** Human-readable explanation. */
+  message: string
+  /** Column name if the reason is column-scoped. */
+  column?: string
+}
+
 export interface InspectTable {
   name: string
   schema: string
@@ -55,6 +66,17 @@ export interface InspectTable {
   incomingFKCount: number
   outgoingFKCount: number
   notes: string[]
+  /**
+   * Compatibility verdict for this table at the current count of rows.
+   *   - `ok`      → seedforge will produce realistic, valid rows.
+   *   - `risky`   → seedforge can generate, but some columns may be low
+   *                 fidelity (unknown types, free text without constraints).
+   *   - `blocked` → seedforge cannot safely generate (no PK, missing
+   *                 generator for a NOT NULL column, etc.).
+   */
+  compatibility: InspectCompatibility
+  /** Concrete reasons for the compatibility verdict. */
+  compatibilityReasons: InspectCompatibilityReason[]
 }
 
 export interface InspectEnum {
@@ -84,11 +106,97 @@ export interface InspectReport {
     uniqueConstraintCount: number
     checkConstraintCount: number
     enumCount: number
+    compatibility: { ok: number; risky: number; blocked: number }
   }
 }
 
 function qualifiedName(table: TableDef): string {
   return `${table.schema}.${table.name}`
+}
+
+/**
+ * Classify a table's compatibility with seedforge's defaults. The
+ * verdict is conservative — anything we can't reason about positively
+ * gets "risky" so the user sees it before generation runs.
+ */
+function classifyCompatibility(table: TableDef): {
+  compatibility: InspectCompatibility
+  reasons: InspectCompatibilityReason[]
+} {
+  const reasons: InspectCompatibilityReason[] = []
+  let blocked = false
+  let risky = false
+
+  // BLOCKER: no primary key. Generator can't INSERT predictably.
+  if (!table.primaryKey || table.primaryKey.columns.length === 0) {
+    reasons.push({
+      code: 'MISSING_PRIMARY_KEY',
+      message: 'no primary key — seedforge cannot generate rows safely',
+    })
+    blocked = true
+  }
+
+  for (const [name, col] of table.columns) {
+    // BLOCKER: NOT NULL column with type seedforge doesn't recognize and
+    // no default. We can't fill it.
+    if (col.dataType === 'UNKNOWN' && !col.isNullable && !col.hasDefault && !col.isAutoIncrement) {
+      reasons.push({
+        code: 'UNGENERATABLE_COLUMN',
+        column: name,
+        message: `NOT NULL column with unknown type "${col.nativeType}" and no default`,
+      })
+      blocked = true
+      continue
+    }
+
+    // RISKY: unknown type but column is nullable or has a default — we
+    // can fall through but the values may not match the user's intent.
+    if (col.dataType === 'UNKNOWN') {
+      reasons.push({
+        code: 'UNKNOWN_TYPE',
+        column: name,
+        message: `column type "${col.nativeType}" not recognized — values may be low fidelity`,
+      })
+      risky = true
+      continue
+    }
+
+    // RISKY: free-text (TEXT/VARCHAR) with no length cap, no enum, no
+    // CHECK constraint — generator falls back to faker.lorem which is
+    // valid-shaped but not domain-specific.
+    if (
+      (col.dataType === 'TEXT' || col.dataType === 'VARCHAR') &&
+      !col.isNullable &&
+      col.enumValues === null
+    ) {
+      const isCovered =
+        looksLikeNamedColumn(name) || (col.maxLength !== null && col.maxLength <= 32)
+      if (!isCovered) {
+        reasons.push({
+          code: 'UNCONSTRAINED_TEXT',
+          column: name,
+          message: 'free-text column without enum/check; generator falls back to lorem',
+        })
+        risky = true
+      }
+    }
+  }
+
+  if (blocked) return { compatibility: 'blocked', reasons }
+  if (risky) return { compatibility: 'risky', reasons }
+  return { compatibility: 'ok', reasons }
+}
+
+/**
+ * Heuristic: column names that the mapper has good generators for
+ * (`email`, `name`, `phone`, `url`, …) shouldn't be flagged as risky
+ * just because the type is free-text.
+ */
+function looksLikeNamedColumn(name: string): boolean {
+  const lower = name.toLowerCase()
+  return /(^|_)(email|name|first_name|last_name|phone|url|website|address|city|state|country|zip|postal|company|title|description|slug|username|user|handle|domain|category|tag|label|sku|isbn|currency|locale|language|timezone)($|_)/.test(
+    lower,
+  )
 }
 
 function buildColumn(col: import('../types/schema.js').ColumnDef, table: TableDef): InspectColumn {
@@ -173,6 +281,8 @@ export function inspectSchema(schema: DatabaseSchema): InspectReport {
     const outgoing = table.foreignKeys.length
     const incoming = incomingByTable.get(qname) ?? 0
 
+    const { compatibility, reasons: compatibilityReasons } = classifyCompatibility(table)
+
     tables.push({
       name: table.name,
       schema: table.schema,
@@ -203,6 +313,8 @@ export function inspectSchema(schema: DatabaseSchema): InspectReport {
       incomingFKCount: incoming,
       outgoingFKCount: outgoing,
       notes,
+      compatibility,
+      compatibilityReasons,
     })
 
     totalColumns += table.columns.size
@@ -239,6 +351,11 @@ export function inspectSchema(schema: DatabaseSchema): InspectReport {
       uniqueConstraintCount: totalUnique,
       checkConstraintCount: totalCheck,
       enumCount: schema.enums.size,
+      compatibility: {
+        ok: tables.filter((t) => t.compatibility === 'ok').length,
+        risky: tables.filter((t) => t.compatibility === 'risky').length,
+        blocked: tables.filter((t) => t.compatibility === 'blocked').length,
+      },
     },
   }
 }
@@ -259,7 +376,26 @@ export function formatInspectReport(report: InspectReport): string {
   lines.push(
     `Summary: ${s.tableCount} tables · ${s.columnCount} columns · ${s.foreignKeyCount} FKs · ${s.uniqueConstraintCount} unique · ${s.checkConstraintCount} check · ${s.enumCount} enums`,
   )
+  lines.push(
+    `Compatibility: ${s.compatibility.ok} ok · ${s.compatibility.risky} risky · ${s.compatibility.blocked} blocked`,
+  )
   lines.push('')
+
+  // Compatibility report up front: developers want to know what will and
+  // won't work before the rest of the schema dump.
+  if (s.compatibility.blocked > 0 || s.compatibility.risky > 0) {
+    lines.push('Compatibility report:')
+    for (const t of report.tables) {
+      if (t.compatibility === 'ok') continue
+      const tag = t.compatibility === 'blocked' ? 'BLOCKED' : 'RISKY  '
+      lines.push(`  [${tag}] ${t.schema}.${t.name}`)
+      for (const r of t.compatibilityReasons) {
+        const where = r.column ? `${r.column}: ` : ''
+        lines.push(`           ${where}${r.message}`)
+      }
+    }
+    lines.push('')
+  }
 
   if (report.enums.length > 0) {
     lines.push('Enums:')

@@ -12,6 +12,7 @@ import type {
 import { NormalizedType, FKAction } from '../../types/index.js'
 import { noTablesFound } from '../../errors/index.js'
 import { mapMysqlType, extractMysqlEnumValues } from './type-map.js'
+import { extractEnumLikeValues as sharedExtractEnum } from '../queries/check-constraints.js'
 
 // ─── Row interfaces ─────────────────────────────────────────────────────────
 
@@ -497,41 +498,8 @@ function mapMysqlFKAction(rule: string): FKAction {
   return FK_ACTION_MAP[rule.toUpperCase()] ?? FKAction.NO_ACTION
 }
 
-/**
- * Extract enum-like values from a CHECK constraint expression.
- * Reuses the same patterns as PG check constraint parsing.
- */
+// MySQL CHECK extraction reuses the shared extractor so all three dialects
+// stay in sync.
 function extractCheckEnumValues(expression: string): string[] | null {
-  if (!expression) return null
-
-  // Pattern: IN ('val1', 'val2', ...)
-  const inMatch = expression.match(
-    /\bIN\s*\(\s*((?:'[^']*'(?:\s*,\s*)?)+)\s*\)/i,
-  )
-  if (inMatch) {
-    return extractQuotedValues(inMatch[1])
-  }
-
-  // Pattern: OR chain: col = 'val1' OR col = 'val2'
-  const orParts = expression.split(/\bOR\b/i)
-  if (orParts.length >= 2) {
-    const values: string[] = []
-    for (const part of orParts) {
-      const match = part.match(/=\s*'([^']*)'/)
-      if (match) {
-        values.push(match[1])
-      }
-    }
-    if (values.length === orParts.length && values.length >= 2) {
-      return values
-    }
-  }
-
-  return null
-}
-
-function extractQuotedValues(str: string): string[] | null {
-  const matches = str.match(/'([^']*)'/g)
-  if (!matches || matches.length === 0) return null
-  return matches.map((m) => m.slice(1, -1))
+  return sharedExtractEnum(expression)
 }
