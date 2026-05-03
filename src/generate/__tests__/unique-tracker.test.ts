@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { UniqueTracker } from '../unique-tracker.js'
+import { UniqueTracker, CompositeUniqueTracker } from '../unique-tracker.js'
 import { createSeededFaker } from '../../mapping/seeded-faker.js'
 import { GenerationError } from '../../errors/index.js'
 
@@ -9,13 +9,7 @@ describe('UniqueTracker', () => {
     const faker = createSeededFaker(42)
     const generator = () => 'unique_value'
 
-    const result = tracker.generateUnique(
-      'public.users',
-      'username',
-      generator,
-      faker,
-      0,
-    )
+    const result = tracker.generateUnique('public.users', 'username', generator, faker, 0)
     expect(result).toBe('unique_value')
   })
 
@@ -89,11 +83,7 @@ describe('UniqueTracker', () => {
 
   it('excludes existing values when initialized', () => {
     const tracker = new UniqueTracker()
-    tracker.initFromExisting(
-      'public.users',
-      'email',
-      new Set(['existing@example.com']),
-    )
+    tracker.initFromExisting('public.users', 'email', new Set(['existing@example.com']))
     const faker = createSeededFaker(42)
     const generator = () => 'existing@example.com'
 
@@ -113,9 +103,9 @@ describe('UniqueTracker', () => {
     }
     const generator = () => 'val'
 
-    expect(() =>
-      tracker.generateUnique('public.items', 'name', generator, faker, 0, 5),
-    ).toThrow(GenerationError)
+    expect(() => tracker.generateUnique('public.items', 'name', generator, faker, 0, 5)).toThrow(
+      GenerationError,
+    )
 
     try {
       tracker.generateUnique('public.items', 'name', generator, faker, 0, 5)
@@ -168,5 +158,118 @@ describe('UniqueTracker', () => {
     expect(tracker.add('public.users', 'name', 'alice')).toBe(true)
     expect(tracker.add('public.users', 'name', 'alice')).toBe(false)
     expect(tracker.add('public.users', 'name', 'bob')).toBe(true)
+  })
+
+  // ─── maxLength-aware tracking (post-truncation collision avoidance) ───
+  // Regression for the v2.7.x --fast UNIQUE failure: a generator that
+  // emits values which already saturate the column's maxLength would
+  // produce suffix attempts ("FOO_1", "FOO_2") that the tracker
+  // considered distinct, but post-truncation collapsed back to "FOO_1"
+  // / "FOO_2" / etc. — and on shorter caps, even back to "FOO". The
+  // tracker now stores the post-truncation form so collisions match
+  // what Postgres sees.
+  describe('maxLength-aware tracking', () => {
+    it('returns the truncated value when first candidate exceeds maxLength', () => {
+      const tracker = new UniqueTracker()
+      const faker = createSeededFaker(42)
+      const generator = () => 'INE0123456789EXTRA'
+      const v = tracker.generateUnique('public.schemes', 'isin', generator, faker, 0, 1000, 12)
+      expect(v).toBe('INE012345678')
+    })
+
+    it('produces distinct post-truncation values on collision', () => {
+      // Deterministic colliding generator: same value every call. The
+      // tracker must produce 100 unique post-truncation values via its
+      // suffix strategy, never returning the same 12-char string twice.
+      const tracker = new UniqueTracker()
+      const faker = createSeededFaker(42)
+      const generator = () => 'INE0123456789X' // 14 chars, > maxLength 12
+      const out: string[] = []
+      for (let i = 0; i < 100; i++) {
+        const v = tracker.generateUnique('public.schemes', 'isin', generator, faker, i, 1000, 12)
+        expect(typeof v).toBe('string')
+        expect((v as string).length).toBeLessThanOrEqual(12)
+        out.push(v as string)
+      }
+      // Every generated value is unique post-truncation.
+      expect(new Set(out).size).toBe(100)
+    })
+
+    it('throws SF3002 when truncated suffixes also exhaust at low maxLength', () => {
+      // maxLength=2 + colliding generator → truncated suffix space is
+      // small enough that we eventually exhaust within maxRetries.
+      const tracker = new UniqueTracker()
+      const faker = createSeededFaker(42)
+      const generator = () => 'AB' // already at limit
+      // Generate until exhaustion. With maxLength=2 we have at most 100
+      // unique 2-char values via the counter strategy, so 200 retries
+      // forces the throw.
+      expect(() => {
+        for (let i = 0; i < 1000; i++) {
+          tracker.generateUnique('t', 'c', generator, faker, i, 200, 2)
+        }
+      }).toThrow(GenerationError)
+    })
+
+    it('passes through non-string values without truncation', () => {
+      const tracker = new UniqueTracker()
+      const faker = createSeededFaker(42)
+      let n = 100
+      const generator = () => n++
+      const v = tracker.generateUnique('t', 'c', generator, faker, 0, 1000, 5)
+      expect(v).toBe(100)
+    })
+  })
+})
+
+describe('CompositeUniqueTracker', () => {
+  it('add() returns true for new tuple, false for duplicate', () => {
+    const t = new CompositeUniqueTracker()
+    expect(t.add('public.x', ['a', 'b'], [1, 'foo'])).toBe(true)
+    expect(t.add('public.x', ['a', 'b'], [1, 'foo'])).toBe(false)
+    expect(t.add('public.x', ['a', 'b'], [1, 'bar'])).toBe(true)
+  })
+
+  it('has() returns the same answer as add() would have for an absent key', () => {
+    const t = new CompositeUniqueTracker()
+    expect(t.has('public.x', ['a'], ['v'])).toBe(false)
+    t.add('public.x', ['a'], ['v'])
+    expect(t.has('public.x', ['a'], ['v'])).toBe(true)
+  })
+
+  it('keys are scoped per-table (and per column-set)', () => {
+    const t = new CompositeUniqueTracker()
+    t.add('public.x', ['a', 'b'], [1, 2])
+    expect(t.has('public.y', ['a', 'b'], [1, 2])).toBe(false)
+    expect(t.has('public.x', ['a', 'c'], [1, 2])).toBe(false)
+  })
+
+  it('initFromExisting seeds the tracker so subsequent adds return false', () => {
+    const t = new CompositeUniqueTracker()
+    t.initFromExisting(
+      'public.x',
+      ['a', 'b'],
+      [
+        [1, 'foo'],
+        [2, 'bar'],
+      ],
+    )
+    expect(t.add('public.x', ['a', 'b'], [1, 'foo'])).toBe(false)
+    expect(t.add('public.x', ['a', 'b'], [3, 'baz'])).toBe(true)
+  })
+
+  it('serializes Date tuple values for stable equality', () => {
+    const t = new CompositeUniqueTracker()
+    const d1 = new Date('2024-01-15T00:00:00Z')
+    const d2 = new Date('2024-01-15T00:00:00Z')
+    expect(t.add('public.x', ['d'], [d1])).toBe(true)
+    // Same instant, different reference → still treated as duplicate.
+    expect(t.add('public.x', ['d'], [d2])).toBe(false)
+  })
+
+  it('treats undefined and null as the same key', () => {
+    const t = new CompositeUniqueTracker()
+    expect(t.add('public.x', ['c'], [undefined])).toBe(true)
+    expect(t.add('public.x', ['c'], [null])).toBe(false)
   })
 })

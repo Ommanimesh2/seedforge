@@ -61,7 +61,9 @@ function emptyExistingData(): ExistingData {
 /**
  * Helper to collect all rows from the async generator
  */
-async function collectRows(gen: AsyncGenerator<Row, unknown, undefined>): Promise<{ rows: Row[]; meta: unknown }> {
+async function collectRows(
+  gen: AsyncGenerator<Row, unknown, undefined>,
+): Promise<{ rows: Row[]; meta: unknown }> {
   const rows: Row[] = []
   let result = await gen.next()
   while (!result.done) {
@@ -122,9 +124,7 @@ describe('generateTableStream', () => {
     const table: TableDef = {
       name: 'items',
       schema: 'public',
-      columns: new Map([
-        ['id', makeColumn('id', { dataType: NormalizedType.UUID })],
-      ]),
+      columns: new Map([['id', makeColumn('id', { dataType: NormalizedType.UUID })]]),
       primaryKey: { columns: ['id'], name: 'items_pkey' },
       foreignKeys: [],
       uniqueConstraints: [],
@@ -448,5 +448,114 @@ describe('generateTableStream', () => {
     const usernames = rows.map((r) => r.username)
     const uniqueUsernames = new Set(usernames)
     expect(uniqueUsernames.size).toBe(usernames.length)
+  })
+
+  // ─── composite UNIQUE handling (post-row enforcement) ───────────────
+  it('enforces composite UNIQUE on (FK, DATE) by bumping the date', async () => {
+    // Two-column UNIQUE: (parent_id, event_date). Generator picks
+    // parent_id from the FK pool and event_date via faker. With small
+    // pools and many rows, collisions are guaranteed; the
+    // post-row composite check should bump event_date to keep tuples
+    // distinct.
+    const refPool = new ReferencePoolManager()
+    refPool.addGenerated('public.parents', [[1], [2], [3]])
+
+    const table: TableDef = {
+      name: 'events',
+      schema: 'public',
+      columns: new Map([
+        ['id', makeColumn('id', { dataType: NormalizedType.INTEGER, isAutoIncrement: true })],
+        ['parent_id', makeColumn('parent_id', { dataType: NormalizedType.INTEGER })],
+        ['event_date', makeColumn('event_date', { dataType: NormalizedType.DATE })],
+      ]),
+      primaryKey: { columns: ['id'], name: 'pk' },
+      foreignKeys: [makeFK('fk', ['parent_id'], 'parents')],
+      uniqueConstraints: [{ columns: ['parent_id', 'event_date'], name: 'uk' }],
+      checkConstraints: [],
+      indexes: [],
+      comment: null,
+    }
+
+    const gen = generateTableStream({
+      table,
+      mappingResult: mapTable(table),
+      config: createGenerationConfig({ globalRowCount: 100, seed: 42 }),
+      faker: createSeededFaker(42),
+      referencePool: refPool,
+      uniqueTracker: new UniqueTracker(),
+      existingData: emptyExistingData(),
+      deferredFKColumns: new Set(),
+    })
+
+    const rows: Row[] = []
+    for await (const r of gen) rows.push(r)
+    expect(rows).toHaveLength(100)
+
+    // Every (parent_id, YYYY-MM-DD UTC) tuple should be distinct.
+    const seen = new Set<string>()
+    for (const r of rows) {
+      const d =
+        r.event_date instanceof Date ? r.event_date.toISOString().slice(0, 10) : r.event_date
+      const key = `${r.parent_id}|${d}`
+      expect(seen.has(key)).toBe(false)
+      seen.add(key)
+    }
+  })
+
+  it('enforces composite UNIQUE on two FK columns by resampling the pool', async () => {
+    // (folio_id, scheme_id) UNIQUE — both FK. Mutation isn't safe
+    // (would corrupt FK), so the generator resamples one column from
+    // its reference pool until the tuple is unique.
+    const refPool = new ReferencePoolManager()
+    refPool.addGenerated(
+      'public.folios',
+      Array.from({ length: 50 }, (_, i) => [i + 1]),
+    )
+    refPool.addGenerated(
+      'public.schemes',
+      Array.from({ length: 50 }, (_, i) => [i + 1]),
+    )
+
+    const table: TableDef = {
+      name: 'reported_balances',
+      schema: 'public',
+      columns: new Map([
+        ['id', makeColumn('id', { dataType: NormalizedType.INTEGER, isAutoIncrement: true })],
+        ['folio_id', makeColumn('folio_id', { dataType: NormalizedType.INTEGER })],
+        ['scheme_id', makeColumn('scheme_id', { dataType: NormalizedType.INTEGER })],
+      ]),
+      primaryKey: { columns: ['id'], name: 'pk' },
+      foreignKeys: [
+        makeFK('fk_f', ['folio_id'], 'folios'),
+        makeFK('fk_s', ['scheme_id'], 'schemes'),
+      ],
+      uniqueConstraints: [{ columns: ['folio_id', 'scheme_id'], name: 'uk' }],
+      checkConstraints: [],
+      indexes: [],
+      comment: null,
+    }
+
+    const gen = generateTableStream({
+      table,
+      mappingResult: mapTable(table),
+      config: createGenerationConfig({ globalRowCount: 200, seed: 42 }),
+      faker: createSeededFaker(42),
+      referencePool: refPool,
+      uniqueTracker: new UniqueTracker(),
+      existingData: emptyExistingData(),
+      deferredFKColumns: new Set(),
+    })
+
+    const rows: Row[] = []
+    for await (const r of gen) rows.push(r)
+    expect(rows).toHaveLength(200)
+
+    // 200 distinct (folio_id, scheme_id) pairs from a 50×50=2500 grid.
+    const seen = new Set<string>()
+    for (const r of rows) {
+      const key = `${r.folio_id}|${r.scheme_id}`
+      expect(seen.has(key)).toBe(false)
+      seen.add(key)
+    }
   })
 })
